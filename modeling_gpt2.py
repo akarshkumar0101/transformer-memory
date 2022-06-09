@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch OpenAI GPT-2 model."""
+import matplotlib.pyplot as plt
+from hopfield_memory import HopfieldMemory
+from utils import to_np
 
 import math
 import os
@@ -169,6 +172,7 @@ class GPT2Attention(nn.Module):
 
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
         self.resid_dropout = nn.Dropout(config.resid_pdrop)
+        self.hm = HopfieldMemory((1, 12, 20, 64), alpha=0.7)
 
         self.pruned_heads = set()
 
@@ -188,6 +192,15 @@ class GPT2Attention(nn.Module):
         self.pruned_heads = self.pruned_heads.union(heads)
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
+        
+        # print(key.shape, query.shape, attn_weights.shape) # torch.Size([1, 12, 25, 64]) torch.Size([1, 12, 5, 64]) torch.Size([1, 12, 5, 25])
+
+        do_hopfield_mem = True
+        if do_hopfield_mem:
+            key = torch.cat((self.hm.K.repeat(len(key), 1, 1, 1), key), dim=-2)
+            # print(key.shape)
+            value = torch.cat((self.hm.V.repeat(len(key), 1, 1, 1), value), dim=-2)
+
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
         if self.scale_attn_weights:
@@ -197,6 +210,8 @@ class GPT2Attention(nn.Module):
         if self.scale_attn_by_inverse_layer_idx:
             attn_weights = attn_weights / float(self.layer_idx + 1)
 
+        # plt.imshow(to_np(attn_weights[0, 0])); plt.colorbar()
+        # plt.show()
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
             query_length, key_length = query.size(-2), key.size(-2)
@@ -204,8 +219,6 @@ class GPT2Attention(nn.Module):
             
             attn_weights = torch.where(causal_mask, attn_weights, self.masked_bias.to(attn_weights.dtype))
             # print(query.shape, key.shape, value.shape, attn_weights.shape)
-            import matplotlib.pyplot as plt
-            from utils import to_np
             # plt.imshow(to_np(causal_mask[0, 0]))
             # plt.show()
 
@@ -213,18 +226,31 @@ class GPT2Attention(nn.Module):
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
 
+        self.hm.set_target_attn(attn_weights, query, key, value)
+        self.hm.step()
+        aw_mem, aw_context = attn_weights.split([self.hm.K.shape[-2], query.shape[-2]], dim=-1)
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+        aw_mem_sm, aw_context_sm = aw_mem.softmax(dim=-1), aw_context.softmax(dim=-1)
+        # plt.imshow(to_np(attn_weights[0, 0])); plt.colorbar()
+        # plt.show()
 
         # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
         attn_weights = attn_weights.type(value.dtype)
         attn_weights = self.attn_dropout(attn_weights)
-        # plt.imshow(to_np(attn_weights[0, 0]))
+
+        plt.imshow(to_np(query@key.transpose(-1, -2))[0, 0], vmin=-40, vmax=40); plt.colorbar()
+        plt.show()
+        plt.imshow(to_np(query@torch.randn_like(key).transpose(-1, -2))[0, 0], vmin=-40, vmax=40); plt.colorbar()
+        plt.show()
+        # a = torch.randn(100, 64).to(query)
+        # a = key[..., None, :20, :]
+        # plt.imshow(to_np(torch.cosine_similarity(query[..., None, :], a, dim=-1)[0, 0])); plt.colorbar()
+        # plt.imshow(to_np(torch.cosine_similarity(query[..., None, :], key[..., None, :, :], dim=-1)[0, 0])); plt.colorbar()
         # plt.show()
-        # print(key.shape)
-        # plt.plot(to_np(key.norm(dim=-1)[0, 0]), label='keys')
-        # plt.plot(torch.arange(query.shape[-2]).numpy()+(key.shape[-2]-query.shape[-2]), to_np(query.norm(dim=-1)[0, 0]), label='queries')
-        # plt.legend()
-        # plt.show()
+        plt.plot(to_np(key.norm(dim=-1)[0, 0]), label='keys')
+        plt.plot(torch.arange(query.shape[-2]).numpy()+(key.shape[-2]-query.shape[-2]), to_np(query.norm(dim=-1)[0, 0]), label='queries')
+        plt.legend()
+        plt.show()
 
         # Mask heads if we want to
         if head_mask is not None:
@@ -347,7 +373,10 @@ class GPT2Attention(nn.Module):
             attn_output, attn_weights = self._upcast_and_reordered_attn(query, key, value, attention_mask, head_mask)
         else:
             attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
-
+        # if use_cache: # akarsh's code
+            # present += (attn_output, ) # akarsh's code
+        # print(key.shape, value.shape, attn_output.shape) # use the attn_output that is here
+        
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
         attn_output = self.c_proj(attn_output)
         attn_output = self.resid_dropout(attn_output)
@@ -1099,6 +1128,10 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
+            # print(shift_labels.shape)
+            # print(shift_labels[0])
+            # print(shift_logits.shape)
+            # print(shift_logits.argmax(dim=-1)[0])
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
         if not return_dict:
@@ -1567,3 +1600,4 @@ class GPT2ForTokenClassification(GPT2PreTrainedModel):
             hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
         )
+
