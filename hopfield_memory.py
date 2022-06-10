@@ -4,107 +4,126 @@ from torch import nn
 
 import numpy as np
 
+from utils import smooth_max
+
 class HopfieldMemory(nn.Module):
-    def __init__(self, shape, alpha=0., opt='sgd', lr=1.):
+    def __init__(self, shape, alpha=0.5, use_adaptive_alpha=False, opt='sgd', lr=1.):
         """
-        shape is (..., n_patterns, embed_dim)
+        shape is (..., m, d)
+        d is the embedding dimension
+        m is the number of memory keys and values
+
+        if use_adaptive_alpha is False:
+            alpha = 0 means no movement
+            alpha = 1 means teleport to target
+        if use_adaptive_alpha is True:
+            alpha serves as a scale for the adaptive alpha
+        
+        opt is the optimizer
+        lr is the learning rate for the optimizer
         """
         super().__init__()
-        
+
         # keys/stored patterns
-        self.K = nn.Parameter(torch.randn(*shape))
+        self.Km = nn.Parameter(torch.randn(*shape)*.1)
+        self.Km.requires_grad_(False)
         # values
-        self.V = nn.Parameter(torch.randn(*shape))
+        self.Vm = nn.Parameter(torch.randn(*shape)*.1)
+        self.Vm.requires_grad_(False)
         
         self.alpha = alpha
+        self.use_adaptive_alpha = use_adaptive_alpha
         if opt=='sgd':
             self.opt = torch.optim.SGD(self.parameters(), lr=lr, maximize=True)
         elif opt=='adam':
             self.opt = torch.optim.Adam(self.parameters(), lr=lr, maximize=True)
+
+    def reset(self, mag=0.1):
+        self.Km.data[...] = mag*torch.randn_like(self.Km)
+        self.Vm.data[...] = mag*torch.randn_like(self.Vm)
         
-    def set_target(self, K_target, V_target=None):
+    @torch.no_grad()
+    def set_target(self, Km_target, Vm_target=None, alpha=None):
+        if alpha is None:
+            alpha = self.alpha
+
         self.opt.zero_grad()
-        self.K.grad = (1.-self.alpha)*(K_target-self.K)
-        self.V.grad = (1.-self.alpha)*(V_target-self.V) if V_target is not None else None
+
+        self.Km.grad = alpha*(Km_target-self.Km)
+        self.Vm.grad = alpha*(Vm_target-self.Vm) if Vm_target is not None else None
     
     def step(self):
         self.opt.step()
         
-    def set_target_with_data(self, xk, xv=None, beta=1., dist_metric='dot', beta2=None):
+    @torch.no_grad()
+    def set_target_attn(self, Am, A, Q, K, V, O, 
+                        beta1=1., beta2=1., beta3=1.):
         """
-        K.shape is (..., k, d)
-        xk.shape is (..., n, d) is the data's queries
-        xv.shape is (..., n, d) is the data's values
+        Am is (..., c, m)
+        A is (..., c, c)
+
+        Am is the similarity matrix between the queries and memory keys
+        Am is the similarity matrix between the queries and context keys
+        Am, A are before softmax applied
+
+        Q, K, V, O are (..., c, d)
+        K, V are unused
+        self.Km's target will be in the convex hull of Q
+        self.Vm's target will be in the convex hull of O
+
+        self.Km is (..., m, d)
+        self.Vm is (..., m, d)
         """
+        # c, d = Q.shape[-2:]
+        # m = self.Km.shape[-2]
+
+        # Am_sm, A_sm = Am.softmax(dim=-1), A.softmax(dim=-1)
+        # A_full_sm = torch.cat([Am, A], dim=-1).softmax(dim=-1) # (..., c, m+c)
+
+        # import wandb
+        # wandb.log({"Am_min": Am.min().item(), "Am_max": Am.max().item(), "Am_mean": Am.mean().item()})
+
+        Dc = (beta1*Am).softmax(dim=-1) # (..., c, m)
+        if beta2=="weighted":
+            Dc = Dc/Dc.sum(dim=-2, keepdim=True) # (..., m, c)
+        elif isinstance(beta2, float):
+            Dc = (beta2*Dc).softmax(dim=-2).transpose(-1, -2) # (..., m, c)
+        
+        Km_target = Dc@Q # (..., m, d)
+        Vm_target = Dc@O if O is not None else None # (..., m, d)
+
+        alpha = self.alpha
+        if self.use_adaptive_alpha:
+            alpha = smooth_max((beta1*Am).softmax(dim=-1), alpha=.1, dim=-2) # (..., m)
+            if beta3=="weighted":
+                alpha = alpha/alpha.sum(dim=-1, keepdim=True)
+            elif isinstance(beta3, float):
+                alpha = (beta3*alpha).softmax(dim=-1)
+
+        self.set_target(Km_target, Vm_target, alpha=alpha)
+        self.Am = Am
+        
+    @torch.no_grad()
+    def set_target_with_data(self, Q, O=None, dist_metric='dot',
+                             beta1=1., beta2=1., beta3=1.):
+        """
+        Am is (..., c, m)
+        self.Km is (..., m, d)
+        self.Vm is (..., m, d)
+
+        Q, K, V, O are (..., c, d)
+        K, V are unused
+        self.Km's target will be in the convex hull of Q
+        self.Vm's target will be in the convex hull of O
+
+        self.Km is (..., m, d)
+        self.Vm is (..., m, d)
+        """
+
         if dist_metric=='dot':
-            dists = self.K@xk.transpose(-1, -2)
+            Am = Q@self.Km.transpose(-1, -2)
         elif dist_metric=='euclidean':
-            dists = -(self.K[..., None, :] - xk).norm(dim=-1)
-            
-        # dists.shape is (..., k, n)
+            Am = -torch.linalg.norm(Q[..., None, :] - self.Km, dim=-1)
         
-        dk = (beta*dists).softmax(dim=-2)
-        # dx = (beta*dists).softmax(dim=-1)
-        if beta2 is None:
-            dkx = dk/dk.sum(dim=-1, keepdim=True)
-        else:
-            dkx = (beta2*dk).softmax(dim=-1)
+        self.set_target_attn(Am, None, Q, None, None, O, beta1, beta2, beta3)
         
-        K_target = dkx@xk
-        V_target = dkx@xv if xv is not None else None
-        
-        self.set_target(K_target, V_target)
-
-    def set_target_attn(self, attn_weights, query, key, value, beta=1., dist_metric='dot', beta2=None):
-        """
-        K.shape is (..., k, d)
-        xk.shape is (..., n, d) is the data's queries
-        xv.shape is (..., n, d) is the data's values
-
-        attn_weights is     (..., n, k+n) before softmax
-        query is            (..., n, d)
-        key   is            (..., k+n, d)
-        value is            (..., k+n, d)
-        """
-        xk = query.detach()
-        xv = None
-
-        klen = self.K.shape[-2]
-        nlen = query.shape[-2]
-        dlen = self.K.shape[-1]
-
-        A = attn_weights
-        A_mem, A_context = attn_weights.split([klen, nlen], dim=-1)
-        A_sm = A.softmax(dim=-1)
-        A_mem_sm, A_context_sm = A_mem.softmax(dim=-1), A_context.softmax(dim=-1)
-
-        Q, K, V = query, key, value
-        K_mem, K_context = key.split([klen, nlen], dim=-2)
-        V_mem, V_context = value.split([klen, nlen], dim=-2)
-
-        # sanity checks
-        # assert (self.K-key[..., :klen, :]).abs().max()<1e-4
-        # assert (A_mem-(query@self.K.transpose(-1, -2)/np.sqrt(dlen))).abs().max()<1e-4
-
-        # A_mem is of shape (..., n, k)
-
-        if dist_metric=='dot':
-            # dists = self.K@xk.transpose(-1, -2)
-            dists = A_mem
-        elif dist_metric=='euclidean':
-            dists = -(self.K[..., None, :] - xk).norm(dim=-1)
-            
-        dists = dists.transpose(-1, -2)
-        # dists.shape is (..., k, n)
-        
-        dk = (beta*dists).softmax(dim=-2)
-        # dx = (beta*dists).softmax(dim=-1)
-        if beta2 is None:
-            dkx = dk/dk.sum(dim=-1, keepdim=True)
-        else:
-            dkx = (beta2*dk).softmax(dim=-1)
-        
-        K_target = dkx@xk
-        V_target = dkx@xv if xv is not None else None
-        
-        self.set_target(K_target, V_target)

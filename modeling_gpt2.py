@@ -17,6 +17,7 @@
 import matplotlib.pyplot as plt
 from hopfield_memory import HopfieldMemory
 from utils import to_np
+import wandb
 
 import math
 import os
@@ -172,7 +173,9 @@ class GPT2Attention(nn.Module):
 
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
         self.resid_dropout = nn.Dropout(config.resid_pdrop)
-        self.hm = HopfieldMemory((1, 12, 20, 64), alpha=0.7)
+
+        config = wandb.config
+        self.hm = HopfieldMemory((1, 12, 20, 64), alpha=config.alpha, use_adaptive_alpha=config.adaptive_alpha, opt=config.opt, lr=config.lr)
 
         self.pruned_heads = set()
 
@@ -195,11 +198,12 @@ class GPT2Attention(nn.Module):
         
         # print(key.shape, query.shape, attn_weights.shape) # torch.Size([1, 12, 25, 64]) torch.Size([1, 12, 5, 64]) torch.Size([1, 12, 5, 25])
 
-        do_hopfield_mem = True
-        if do_hopfield_mem:
-            key = torch.cat((self.hm.K.repeat(len(key), 1, 1, 1), key), dim=-2)
+        # torch.manual_seed(0)
+        # self.hm.reset(mag=1.)
+        if wandb.config.hm:
+            key = torch.cat((self.hm.Km, key), dim=-2)
             # print(key.shape)
-            value = torch.cat((self.hm.V.repeat(len(key), 1, 1, 1), value), dim=-2)
+            value = torch.cat((self.hm.Vm, value), dim=-2)
 
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
@@ -226,37 +230,54 @@ class GPT2Attention(nn.Module):
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
 
-        self.hm.set_target_attn(attn_weights, query, key, value)
-        self.hm.step()
-        aw_mem, aw_context = attn_weights.split([self.hm.K.shape[-2], query.shape[-2]], dim=-1)
+        # aw_mem, aw_context = attn_weights.split([self.hm.K.shape[-2], query.shape[-2]], dim=-1)
+
+        # a = attn_weights[0, 0]
+        # plt.figure(figsize=(20, 5))
+        # plt.hist(to_np(a[:, :20].flatten()), color='b', bins=50)
+        # plt.hist(to_np(a[:, 20:].flatten()), color=[1., 0, 0, 0.3], bins=50)
+        # plt.show()
+
+
+        # plt.figure(figsize=(20, 5))
+        # plt.subplot(121)
+        # plt.imshow(to_np(attn_weights[0, 0]), vmin=-3, vmax=3); plt.colorbar()
+        # plt.plot(to_np(key.norm(dim=-1)[0, 0]), c='r', label='keys')
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-        aw_mem_sm, aw_context_sm = aw_mem.softmax(dim=-1), aw_context.softmax(dim=-1)
-        # plt.imshow(to_np(attn_weights[0, 0])); plt.colorbar()
+        # aw_mem_sm, aw_context_sm = aw_mem.softmax(dim=-1), aw_context.softmax(dim=-1)
+        # plt.subplot(122)
+        # plt.imshow(to_np(attn_weights[0, 0]), vmin=0, vmax=.1); plt.colorbar()
+        # plt.plot(to_np(key.norm(dim=-1)[0, 0]), c='r', label='keys')
         # plt.show()
 
         # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
         attn_weights = attn_weights.type(value.dtype)
         attn_weights = self.attn_dropout(attn_weights)
 
-        plt.imshow(to_np(query@key.transpose(-1, -2))[0, 0], vmin=-40, vmax=40); plt.colorbar()
-        plt.show()
-        plt.imshow(to_np(query@torch.randn_like(key).transpose(-1, -2))[0, 0], vmin=-40, vmax=40); plt.colorbar()
-        plt.show()
+        # plt.imshow(to_np(query@key.transpose(-1, -2))[0, 0], vmin=-40, vmax=40); plt.colorbar()
+        # plt.show()
+        # plt.imshow(to_np(query@torch.randn_like(key).transpose(-1, -2))[0, 0], vmin=-40, vmax=40); plt.colorbar()
+        # plt.show()
         # a = torch.randn(100, 64).to(query)
         # a = key[..., None, :20, :]
         # plt.imshow(to_np(torch.cosine_similarity(query[..., None, :], a, dim=-1)[0, 0])); plt.colorbar()
         # plt.imshow(to_np(torch.cosine_similarity(query[..., None, :], key[..., None, :, :], dim=-1)[0, 0])); plt.colorbar()
         # plt.show()
-        plt.plot(to_np(key.norm(dim=-1)[0, 0]), label='keys')
-        plt.plot(torch.arange(query.shape[-2]).numpy()+(key.shape[-2]-query.shape[-2]), to_np(query.norm(dim=-1)[0, 0]), label='queries')
-        plt.legend()
-        plt.show()
+        # plt.plot(to_np(key.norm(dim=-1)[0, 0]), label='keys')
+        # plt.plot(torch.arange(query.shape[-2]).numpy()+(key.shape[-2]-query.shape[-2]), to_np(query.norm(dim=-1)[0, 0]), label='queries')
+        # plt.legend()
+        # plt.show()
 
         # Mask heads if we want to
         if head_mask is not None:
             attn_weights = attn_weights * head_mask
 
         attn_output = torch.matmul(attn_weights, value)
+
+        config = wandb.config
+        self.hm.set_target_with_data(Q=query, O=attn_output, dist_metric='dot', 
+                                     beta1=config.beta1, beta2=config.beta2, beta3=config.beta3)
+        self.hm.step()
 
         return attn_output, attn_weights
 
