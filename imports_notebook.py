@@ -13,7 +13,10 @@ from transformers import AutoTokenizer
 
 from modeling_gpt2 import GPT2Model, GPT2LMHeadModel
 from hopfield_memory import HopfieldMemory
-from utils import to_np, count_params
+from utils import *
+import viz
+
+sm = softmax
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

@@ -23,9 +23,9 @@ def smooth_max(x, alpha, dim=-1):
     return ((alpha*x).softmax(dim=dim)*x).sum(dim=dim)
 
 
-def softmax(x, dim=-1, beta=1.):
+def softmax(x, beta=1., dim=-1):
     if beta=='weighted':
         return x/x.sum(dim=dim, keepdim=True)
-    else
+    else:
         return (beta*x).softmax(dim=dim)
     

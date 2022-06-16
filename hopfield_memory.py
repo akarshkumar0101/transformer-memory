@@ -4,7 +4,7 @@ from torch import nn
 
 import numpy as np
 
-from utils import smooth_max
+from utils import smooth_max, softmax as sm
 
 class HopfieldMemory(nn.Module):
     def __init__(self, shape, alpha=0.5, use_adaptive_alpha=False, opt='sgd', lr=1.):
@@ -42,10 +42,12 @@ class HopfieldMemory(nn.Module):
         self.Km.data[...] = mag*torch.randn_like(self.Km)
         self.Vm.data[...] = mag*torch.randn_like(self.Vm)
         
-    @torch.no_grad()
+    # @torch.no_grad()
     def set_target(self, Km_target, Vm_target=None, alpha=None):
         if alpha is None:
             alpha = self.alpha
+        if isinstance(alpha, torch.Tensor) and alpha.shape==(len(self.Km), ):
+            alpha = alpha[:, None]
 
         self.opt.zero_grad()
 
@@ -55,7 +57,7 @@ class HopfieldMemory(nn.Module):
     def step(self):
         self.opt.step()
         
-    @torch.no_grad()
+    # @torch.no_grad()
     def set_target_attn(self, Am, A, Q, K, V, O, 
                         beta1=1., beta2=1., beta3=1.):
         """
@@ -83,11 +85,8 @@ class HopfieldMemory(nn.Module):
         # import wandb
         # wandb.log({"Am_min": Am.min().item(), "Am_max": Am.max().item(), "Am_mean": Am.mean().item()})
 
-        Dc = (beta1*Am).softmax(dim=-1) # (..., c, m)
-        if beta2=="weighted":
-            Dc = Dc/Dc.sum(dim=-2, keepdim=True) # (..., m, c)
-        elif isinstance(beta2, float):
-            Dc = (beta2*Dc).softmax(dim=-2) # (..., m, c)
+        Dc = sm(Am, beta1, -1) # (..., c, m)
+        Dc = sm(Dc, beta2, -2)
         Dc = Dc.transpose(-1, -2)
         
         Km_target = Dc@Q # (..., m, d)
@@ -95,16 +94,13 @@ class HopfieldMemory(nn.Module):
 
         alpha = self.alpha
         if self.use_adaptive_alpha:
-            alpha = smooth_max((beta1*Am).softmax(dim=-1), alpha=.1, dim=-2) # (..., m)
-            if beta3=="weighted":
-                alpha = alpha/alpha.sum(dim=-1, keepdim=True)
-            elif isinstance(beta3, float):
-                alpha = (beta3*alpha).softmax(dim=-1)
+            alpha = alpha*smooth_max(sm(Am, beta1, -1), alpha=0., dim=-2) # (..., m)
+            # alpha = sm(alpha, beta3, -1)
 
         self.set_target(Km_target, Vm_target, alpha=alpha)
         self.Am = Am
         
-    @torch.no_grad()
+    # @torch.no_grad()
     def set_target_with_data(self, Q, O=None, dist_metric='dot',
                              beta1=1., beta2=1., beta3=1.):
         """
