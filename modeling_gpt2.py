@@ -174,8 +174,8 @@ class GPT2Attention(nn.Module):
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
         self.resid_dropout = nn.Dropout(config.resid_pdrop)
 
-        config = wandb.config
-        self.hm = HopfieldMemory((1, 12, 20, 64), alpha=config.alpha, use_adaptive_alpha=config.adaptive_alpha, opt=config.opt, lr=config.lr)
+        # config = wandb.config
+        # self.hm = HopfieldMemory((1, 12, 20, 64), alpha=config.alpha, use_adaptive_alpha=config.adaptive_alpha, opt=config.opt, lr=config.lr)
 
         self.pruned_heads = set()
 
@@ -194,16 +194,17 @@ class GPT2Attention(nn.Module):
         self.num_heads = self.num_heads - len(heads)
         self.pruned_heads = self.pruned_heads.union(heads)
 
-    def _attn(self, query, key, value, attention_mask=None, head_mask=None):
+    def _attn(self, query, key, value, attention_mask=None, head_mask=None, ak=None):
+        ak_layer = {}
+        # hm = ak['hms'][self.layer_idx]
         
         # print(key.shape, query.shape, attn_weights.shape) # torch.Size([1, 12, 25, 64]) torch.Size([1, 12, 5, 64]) torch.Size([1, 12, 5, 25])
 
         # torch.manual_seed(0)
         # self.hm.reset(mag=1.)
-        if wandb.config.hm:
-            key = torch.cat((self.hm.Km, key), dim=-2)
-            # print(key.shape)
-            value = torch.cat((self.hm.Vm, value), dim=-2)
+        # if wandb.config.hm:
+            # key = torch.cat((self.hm.Km, key), dim=-2)
+            # value = torch.cat((self.hm.Vm, value), dim=-2)
 
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
@@ -213,6 +214,7 @@ class GPT2Attention(nn.Module):
         # Layer-wise attention scaling
         if self.scale_attn_by_inverse_layer_idx:
             attn_weights = attn_weights / float(self.layer_idx + 1)
+        
 
         # plt.imshow(to_np(attn_weights[0, 0])); plt.colorbar()
         # plt.show()
@@ -222,13 +224,16 @@ class GPT2Attention(nn.Module):
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].to(torch.bool)
             
             attn_weights = torch.where(causal_mask, attn_weights, self.masked_bias.to(attn_weights.dtype))
-            # print(query.shape, key.shape, value.shape, attn_weights.shape)
             # plt.imshow(to_np(causal_mask[0, 0]))
             # plt.show()
 
         if attention_mask is not None:
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
+
+        if ak['debug']:
+            ak_layer['A'] = attn_weights
+            ak_layer['QKV'] = query, key, value
 
         # aw_mem, aw_context = attn_weights.split([self.hm.K.shape[-2], query.shape[-2]], dim=-1)
 
@@ -249,6 +254,8 @@ class GPT2Attention(nn.Module):
         # plt.imshow(to_np(attn_weights[0, 0]), vmin=0, vmax=.1); plt.colorbar()
         # plt.plot(to_np(key.norm(dim=-1)[0, 0]), c='r', label='keys')
         # plt.show()
+        if ak['debug']:
+            ak_layer['A_sm'] = attn_weights
 
         # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
         attn_weights = attn_weights.type(value.dtype)
@@ -274,10 +281,14 @@ class GPT2Attention(nn.Module):
 
         attn_output = torch.matmul(attn_weights, value)
 
-        config = wandb.config
-        self.hm.set_target_with_data(Q=query, O=attn_output, dist_metric='dot', 
-                                     beta1=config.beta1, beta2=config.beta2, beta3=config.beta3)
-        self.hm.step()
+        # config = wandb.config
+        # self.hm.set_target_with_data(Q=query, O=attn_output, dist_metric='dot', 
+                                    #  beta1=config.beta1, beta2=config.beta2, beta3=config.beta3)
+        # self.hm.step()
+
+        ak_layer['O'] = attn_output
+
+        ak['layer'].append(ak_layer)
 
         return attn_output, attn_weights
 
@@ -360,6 +371,7 @@ class GPT2Attention(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        ak=None,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
         if encoder_hidden_states is not None:
             if not hasattr(self, "q_attn"):
@@ -380,9 +392,7 @@ class GPT2Attention(nn.Module):
 
         if layer_past is not None:
             past_key, past_value = layer_past
-            # print(key.shape)
             key = torch.cat((past_key, key), dim=-2)
-            # print(key.shape)
             value = torch.cat((past_value, value), dim=-2)
 
         if use_cache is True:
@@ -393,7 +403,7 @@ class GPT2Attention(nn.Module):
         if self.reorder_and_upcast_attn:
             attn_output, attn_weights = self._upcast_and_reordered_attn(query, key, value, attention_mask, head_mask)
         else:
-            attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
+            attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask, ak=ak)
         # if use_cache: # akarsh's code
             # present += (attn_output, ) # akarsh's code
         # print(key.shape, value.shape, attn_output.shape) # use the attn_output that is here
@@ -452,9 +462,10 @@ class GPT2Block(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        ak=None,
     ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
         residual = hidden_states
-        hidden_states = self.ln_1(hidden_states)
+        hidden_states = self.ln_1(hidden_states) # batch, context, embed_dim -> normalizing across only the embed_dim
         attn_outputs = self.attn(
             hidden_states,
             layer_past=layer_past,
@@ -462,6 +473,7 @@ class GPT2Block(nn.Module):
             head_mask=head_mask,
             use_cache=use_cache,
             output_attentions=output_attentions,
+            ak=ak,
         )
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
         outputs = attn_outputs[1:]
@@ -824,6 +836,7 @@ class GPT2Model(GPT2PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        ak=None,
     ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -970,6 +983,7 @@ class GPT2Model(GPT2PreTrainedModel):
                     encoder_attention_mask=encoder_attention_mask,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
+                    ak=ak,
                 )
 
             hidden_states = outputs[0]
@@ -1109,6 +1123,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        ak=None,
     ) -> Union[Tuple, CausalLMOutputWithCrossAttentions]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -1132,6 +1147,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            ak=ak,
         )
         hidden_states = transformer_outputs[0]
 

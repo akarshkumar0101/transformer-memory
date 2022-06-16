@@ -63,7 +63,7 @@ class HopfieldMemory(nn.Module):
         A is (..., c, c)
 
         Am is the similarity matrix between the queries and memory keys
-        Am is the similarity matrix between the queries and context keys
+        A is the similarity matrix between the queries and context keys
         Am, A are before softmax applied
 
         Q, K, V, O are (..., c, d)
@@ -87,7 +87,8 @@ class HopfieldMemory(nn.Module):
         if beta2=="weighted":
             Dc = Dc/Dc.sum(dim=-2, keepdim=True) # (..., m, c)
         elif isinstance(beta2, float):
-            Dc = (beta2*Dc).softmax(dim=-2).transpose(-1, -2) # (..., m, c)
+            Dc = (beta2*Dc).softmax(dim=-2) # (..., m, c)
+        Dc = Dc.transpose(-1, -2)
         
         Km_target = Dc@Q # (..., m, d)
         Vm_target = Dc@O if O is not None else None # (..., m, d)
@@ -123,7 +124,7 @@ class HopfieldMemory(nn.Module):
         if dist_metric=='dot':
             Am = Q@self.Km.transpose(-1, -2)
         elif dist_metric=='euclidean':
-            Am = -torch.linalg.norm(Q[..., None, :] - self.Km, dim=-1)
+            Am = -torch.linalg.norm(Q[..., :, None, :] - self.Km[..., None, :, :], dim=-1)
         
         self.set_target_attn(Am, None, Q, None, None, O, beta1, beta2, beta3)
         
