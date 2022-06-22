@@ -5,8 +5,15 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 
+def plt_grid(mat_shape):
+    # c = [.5, .5, .5, .2]
+    c = [1., 0., 0., .1]
+    for i in range(mat_shape[0]):
+        plt.axhline(i, c=c)
+    for i in range(mat_shape[1]):
+        plt.axvline(i, c=c)
 
-def viz_Am(Am, beta1, beta2, figsize=(20, 5)):
+def viz_Am(Am, beta1, beta2, figsize=(20, 5), grid=True):
     cl, m = Am.shape
     a = sm(Am, beta1, -1)
     b = sm(sm(Am, beta1, -1), beta2, -2)
@@ -27,24 +34,35 @@ def viz_Am(Am, beta1, beta2, figsize=(20, 5)):
     
     plt.subplot(*plt_size, 1); plt.title('Am')
     plt.imshow(to_np(Am)); plt.colorbar()
+    if grid:
+        plt_grid(Am.shape)
+    # plt_args = dict(vmin=0, vmax=1)
+    plt_args = dict()
     
     plt.subplot(*plt_size, 2); plt.title(f'Am.sm({beta1}, -1)')
-    plt.imshow(to_np(a), vmin=0, vmax=1); plt.colorbar()
+    plt.imshow(to_np(a), **plt_args); plt.colorbar()
     plot_adaptive_step_size_over()
+    if grid:
+        plt_grid(Am.shape)
     
     plt.subplot(*plt_size, 3); plt.title(f'Am.sm({beta1}, -1).sm({beta2}, -2)')
-    plt.imshow(to_np(b), vmin=0, vmax=1); plt.colorbar()
+    plt.imshow(to_np(b), **plt_args); plt.colorbar()
     plot_adaptive_step_size_over()
+    if grid:
+        plt_grid(Am.shape)
     
     # plt.imshow(to_np(a), vmin=0, vmax=1); plt.colorbar()
     # y, x = np.arange(Am.shape[0])[::-1], np.arange(Am.shape[1])
     # y, x = np.meshgrid(y, x, indexing='ij')
     # plt.pcolormesh(to_np(a), x, y, vmin=0, vmax=1); plt.colorbar()
 
-def viz_Q_Km(Q, Km, figsize=(10, 5)):
+def viz_Q_Km(Q, Km, figsize=(10, 5), grid=True):
     plt.figure(figsize=figsize)
     plt.subplot(121); plt.title('Q')
     plt.imshow(to_np(Q))
+    if grid:
+        plt_grid(Q.shape)
     plt.subplot(122); plt.title('Km')
     plt.imshow(to_np(Km))
-    plt.show()
+    if grid:
+        plt_grid(Km.shape)

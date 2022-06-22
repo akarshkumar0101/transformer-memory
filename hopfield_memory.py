@@ -46,8 +46,6 @@ class HopfieldMemory(nn.Module):
     def set_target(self, Km_target, Vm_target=None, alpha=None):
         if alpha is None:
             alpha = self.alpha
-        if isinstance(alpha, torch.Tensor) and alpha.shape==(len(self.Km), ):
-            alpha = alpha[:, None]
 
         self.opt.zero_grad()
 
@@ -92,10 +90,11 @@ class HopfieldMemory(nn.Module):
         Km_target = Dc@Q # (..., m, d)
         Vm_target = Dc@O if O is not None else None # (..., m, d)
 
-        alpha = self.alpha
+        alpha = torch.full((*self.Km.shape[:-1], 1), fill_value=self.alpha, device=self.Km.device)
         if self.use_adaptive_alpha:
-            alpha = alpha*smooth_max(sm(Am, beta1, -1), alpha=0., dim=-2) # (..., m)
+            alpha = alpha*smooth_max(sm(Am, beta1, -1), alpha=0., dim=-2)[..., None] # (..., m, 1)
             # alpha = sm(alpha, beta3, -1)
+        self.used_alpha = alpha
 
         self.set_target(Km_target, Vm_target, alpha=alpha)
         self.Am = Am

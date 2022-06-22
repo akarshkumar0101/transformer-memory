@@ -3,6 +3,7 @@ from tqdm import tqdm
 
 with open('book.txt') as f:
     text_book = f.read()
+    text_book = ' '.join(text_book.split())
 
 def calc_perplexity(tokenizer, model, text=None, context_length=100, stride=1, device='cpu', wandb=None):
     if text is None:
