@@ -1,11 +1,10 @@
 import torch
-from tqdm import tqdm
 
 with open('book.txt') as f:
     text_book = f.read()
     text_book = ' '.join(text_book.split())
 
-def calc_perplexity(tokenizer, model, text=None, context_length=100, stride=1, device='cpu', wandb=None):
+def calc_perplexity(tokenizer, model, text=None, context_length=100, stride=1, device='cpu', wandb=None, tqdm=None):
     if text is None:
         text = text_book
         
@@ -14,11 +13,15 @@ def calc_perplexity(tokenizer, model, text=None, context_length=100, stride=1, d
     
     all_tokens = tokenizer(text, return_tensors='pt')
     encodings = all_tokens
+    # encodings.input_ids = encodings.input_ids[:, :1000]
     
     model = model.to(device)
 
     nlls = []
-    for i in tqdm(range(0, encodings.input_ids.size(1), stride)):
+    pbar = range(0, encodings.input_ids.size(1), stride)
+    if tqdm is not None:
+        pbar = tqdm(pbar)
+    for i in pbar:
     # for i in tqdm(range(0, 5000, stride)):
         begin_loc = max(i + stride - max_length, 0)
         end_loc = min(i + stride, encodings.input_ids.size(1))
@@ -38,15 +41,16 @@ def calc_perplexity(tokenizer, model, text=None, context_length=100, stride=1, d
         else:
             print('Found NaN value')
 
+        ppl = (torch.stack(nlls).sum()/end_loc).exp().item() if len(nlls)>0 else 0.
+        data = {'nll': neg_log_likelihood.item(), 
+                'nll_running_mean': torch.stack(nlls).mean().item() if len(nlls)>0 else 0.,
+                'running_ppl': ppl}
         if wandb is not None and i % 100 == 0 and len(nlls) > 0:
-            wandb.log({'nll': neg_log_likelihood.item(), 
-                       'nll_running_mean': torch.stack(nlls).mean().item(),
-                       'running_ppl': (torch.stack(nlls).sum()/end_loc).exp().item()})
-
-    nlls = torch.stack(nlls)
-    ppl = torch.exp(nlls.sum() / end_loc)
+            wandb.log(data)
+        if tqdm is not None:
+            pbar.set_postfix(data)
 
     if wandb is not None:
         wandb.log({'final_ppl': ppl.item()})
-    return ppl
+    return ppl, torch.stack(nlls)
 

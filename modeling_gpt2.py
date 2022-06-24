@@ -195,7 +195,7 @@ class GPT2Attention(nn.Module):
         self.pruned_heads = self.pruned_heads.union(heads)
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None, ak=None):
-        ak_layer = {}
+        akl = {}
         # hm = ak['hms'][self.layer_idx]
         
         # print(key.shape, query.shape, attn_weights.shape) # torch.Size([1, 12, 25, 64]) torch.Size([1, 12, 5, 64]) torch.Size([1, 12, 5, 25])
@@ -231,9 +231,9 @@ class GPT2Attention(nn.Module):
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
 
-        if ak['debug']:
-            ak_layer['A'] = attn_weights
-            ak_layer['QKV'] = query, key, value
+        if ak is not None and ak['debug']:
+            akl['A'] = attn_weights
+            akl['QKV'] = query, key, value
 
         # aw_mem, aw_context = attn_weights.split([self.hm.K.shape[-2], query.shape[-2]], dim=-1)
 
@@ -254,8 +254,8 @@ class GPT2Attention(nn.Module):
         # plt.imshow(to_np(attn_weights[0, 0]), vmin=0, vmax=.1); plt.colorbar()
         # plt.plot(to_np(key.norm(dim=-1)[0, 0]), c='r', label='keys')
         # plt.show()
-        if ak['debug']:
-            ak_layer['A_sm'] = attn_weights
+        if ak is not None and ak['debug']:
+            akl['A_sm'] = attn_weights
 
         # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
         attn_weights = attn_weights.type(value.dtype)
@@ -286,9 +286,9 @@ class GPT2Attention(nn.Module):
                                     #  beta1=config.beta1, beta2=config.beta2, beta3=config.beta3)
         # self.hm.step()
 
-        ak_layer['O'] = attn_output
-
-        ak['layer'].append(ak_layer)
+        akl['O'] = attn_output
+        if ak is not None:
+            ak['layers'].append(akl)
 
         return attn_output, attn_weights
 

@@ -1,6 +1,8 @@
 # %load_ext autoreload
 # %autoreload 2
 
+from collections import defaultdict
+
 import sys
 
 from tqdm.notebook import tqdm
