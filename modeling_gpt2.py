@@ -913,6 +913,8 @@ class GPT2Model(GPT2PreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
         position_embeds = self.wpe(position_ids)
+        # position_embeds = position_embeds.flip(dims=(-1,))
+
         # ridx1 = torch.randperm(position_embeds.shape[-2])
         # ridx2 = torch.randperm(position_embeds.shape[-2])
         # print('shuffling position embeddings: ', ridx1)

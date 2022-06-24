@@ -29,9 +29,15 @@ def initialize_hms(**kwargs):
     print('Initializing Hopfield memories...')
     print('alpha:', alpha)
     print('use_adaptive_alpha:', use_adaptive_alpha)
+
+    n_layers, n_heads = model.config.n_layer, model.config.n_head
+    n_dim = model.config.n_embd//n_heads
+
+    # hms = HopfieldMemory((n_layers, 1, n_heads, n_memories, n_dim), alpha=alpha, use_adaptive_alpha=use_adaptive_alpha, opt='sgd', lr=1.0).to(device)
     hms = [HopfieldMemory((1, 12, n_memories, 64), alpha=alpha, use_adaptive_alpha=use_adaptive_alpha, opt='sgd', lr=1.0).to(device) for i in range(6)]
 
-    input_ids = input_ids_all[None, :context_length].to(device)
+    idx_token_start = 1000
+    input_ids = input_ids_all[None, idx_token_start:idx_token_start+context_length].to(device)
     ak = {'debug': True, 'layers': [], 'hms': hms}
     outputs = model(input_ids, labels=None, ak=ak)
 
@@ -44,11 +50,15 @@ def initialize_hms(**kwargs):
     plt.subplot(121); plt.title('Km~N(0,1), K~LM')
     plt.hist([to_np(A.flatten()), to_np(Am.flatten())], bins=100, label=['A', 'Am']); plt.legend()
 
+
+    # Q, K, V = (torch.stack([akl['QKV'][i] for akl in ak['layers']]) for i in range(3))
+    # hm.reset(1.)
+
     for idx_layer, hm in enumerate(hms):
         Q, K, V = ak['layers'][idx_layer]['QKV']
         hm.to(Q)
-        hm.reset(1.)
-        hm.Km.data[...] = hm.Km.data[...]*K.std(dim=-2, keepdim=True)+K.mean(dim=-2, keepdim=True)
+        # hm.reset(1.)
+        # hm.Km.data[...] = hm.Km.data[...]*K.std(dim=-2, keepdim=True)+K.mean(dim=-2, keepdim=True)
         # hm.Km.data[:, :] = (hm.Km.data[:, :]+K.mean(dim=0))*K.std(dim=0)
         # hm.Km.data[:, :] = Q[torch.randint(len(Q), (len(hm.Km), ))]
 
@@ -68,7 +78,7 @@ def experiment(tokenizer, model, text=None, context_length=100, stride=1, device
     if text is None:
         text = text_book
         
-    torch.manual_seed(3)
+    torch.manual_seed(11)
     tokens_all = tokenizer.tokenize(text)
     input_ids_all = tokenizer(text, return_tensors='pt').input_ids[0]
     
@@ -92,9 +102,9 @@ def experiment(tokenizer, model, text=None, context_length=100, stride=1, device
         
     steps = defaultdict(lambda: [])
 
-    idx_token_start = context_length
+    idx_token_start = context_length+1000
     idx_token_end = len(input_ids_all)
-    idx_token_end = context_length+3000 # REMOVE THIS LINE
+    idx_token_end = idx_token_start+10000 # REMOVE THIS LINE
     len_loop = idx_token_end-idx_token_start
     pbar = range(idx_token_start, idx_token_end, stride)
     if tqdm is not None:
@@ -106,7 +116,7 @@ def experiment(tokenizer, model, text=None, context_length=100, stride=1, device
         end_loc = min(idx_token + stride, len(input_ids_all))
         trg_len = end_loc - idx_token  # may be different from stride on last loop
         input_ids = input_ids_all[None, begin_loc: end_loc].to(device)
-        # input_ids = input_ids_all[None, :context_length].to(device) # REMOVE THIS LINE
+        input_ids = input_ids_all[None, :context_length].to(device) # REMOVE THIS LINE
         tokens_context = tokens_all[begin_loc: end_loc]
         target_ids = input_ids.clone()
         target_ids[:, :-trg_len] = -100
@@ -140,9 +150,9 @@ def experiment(tokenizer, model, text=None, context_length=100, stride=1, device
             Am = Q@Km.transpose(-1, -2)
             print(Am.shape, idx_head_viz)
             viz.viz_Am(Am[0, idx_head_viz], beta1=beta1, beta2=beta2)
-            plt.tight_layout(); plt.show()
+            plt.suptitle(f'layer {idx_layer_viz} head {idx_head_viz}'); plt.tight_layout(); plt.show()
             viz.viz_Q_Km(Q[0, idx_head_viz], Km[0, idx_head_viz])
-            plt.tight_layout(); plt.show()
+            plt.suptitle(f'layer {idx_layer_viz} head {idx_head_viz}'); plt.tight_layout(); plt.show()
         # do_step_viz(**locals())
         a = (Km[..., None, :, :]-Km[..., :, None, :]).norm(dim=-1)
         step['Km_spread'] = a.mean().item()
@@ -164,6 +174,7 @@ def experiment(tokenizer, model, text=None, context_length=100, stride=1, device
     plt.plot(steps['Q_spread'], label='Q spread')
     plt.legend()
     plt.show()
+    return hms
     
 #     plt.figure(figsize=(20,5))
 #     graph = np.array(graph).swapaxes(-1, -2)
@@ -199,5 +210,34 @@ def do_step_viz(**kwargs):
     # dK = (Km-Kmp).norm(dim=-1).mean().item()
     # steps[f'dK_layer{layer_idx}'].append(dK)
         
-                
+def calc_n_unique_vectors(X, distance=2.5, method='smart', do_viz_hist=False, do_viz_mat=False):
+    """
+    X.shape should be (..., n_vectors, n_dim)
+    """
+    a = (X[..., :, None, :]-X[..., None, :, :]).norm(dim=-1)
+    
+    if do_viz_hist:
+        plt.hist((to_np(a.flatten())), bins=100)
+        plt.gca().axvline(distance, c='r', linestyle='dotted')
+        plt.show()
+
+    a = (a<distance)
+
+    if do_viz_mat:
+        plt.imshow(to_np(a.to(float)), vmin=0, vmax=1); plt.colorbar()
+        plt.show()
+        
+    if method=='force':
+        raise Exception("does not actually work with batches so don't use")
+        n = 0
+        while len(a)>0:
+            n += 1 # found a unique vector
+            idxs = torch.ones(len(a)).to(a).to(bool)
+            idxs[a[0]] = False # remove all vectors that match me, including me
+            a = a[idxs][:, idxs]
+    
+    elif method=='smart':
+        n = (1./a.sum(dim=-1)).sum(dim=-1)
+    
+    return n
 
