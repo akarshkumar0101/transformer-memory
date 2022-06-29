@@ -66,3 +66,11 @@ def viz_Q_Km(Q, Km, figsize=(10, 5), grid=True):
     plt.imshow(to_np(Km))
     if grid:
         plt_grid(Km.shape)
+
+def imshow_unique_vecs(a):
+    """
+    a.shape should be (layers, heads)
+    """
+    plt.title("Number of unique vectors")
+    plt.ylabel('# of Layers'); plt.xlabel('# of Heads')
+    plt.imshow(to_np(a)); plt.colorbar()

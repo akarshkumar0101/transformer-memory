@@ -195,16 +195,16 @@ class GPT2Attention(nn.Module):
         self.pruned_heads = self.pruned_heads.union(heads)
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None, ak=None):
-        akl = {}
         # hm = ak['hms'][self.layer_idx]
         
         # print(key.shape, query.shape, attn_weights.shape) # torch.Size([1, 12, 25, 64]) torch.Size([1, 12, 5, 64]) torch.Size([1, 12, 5, 25])
 
         # torch.manual_seed(0)
         # self.hm.reset(mag=1.)
-        # if wandb.config.hm:
-            # key = torch.cat((self.hm.Km, key), dim=-2)
-            # value = torch.cat((self.hm.Vm, value), dim=-2)
+        if ak is not None and 'pKpV' in ak and ak['pKpV'] is not None:
+            pK, pV = [a[:, self.layer_idx] for a in ak['pKpV']]
+            key = torch.cat((pK, key), dim=-2)
+            value = torch.cat((pV, value), dim=-2)
 
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
@@ -232,8 +232,10 @@ class GPT2Attention(nn.Module):
             attn_weights = attn_weights + attention_mask
 
         if ak is not None and ak['debug']:
-            akl['A'] = attn_weights
-            akl['QKV'] = query, key, value
+            if 'QKV' not in ak:
+                ak['QKV'] = [a[:, None] for a in [query, key, value]]
+            else:
+                ak['QKV'] = [torch.cat([a, b[:, None]], dim=1) for a, b in zip(ak['QKV'], (query, key, value))]
 
         # aw_mem, aw_context = attn_weights.split([self.hm.K.shape[-2], query.shape[-2]], dim=-1)
 
@@ -254,8 +256,6 @@ class GPT2Attention(nn.Module):
         # plt.imshow(to_np(attn_weights[0, 0]), vmin=0, vmax=.1); plt.colorbar()
         # plt.plot(to_np(key.norm(dim=-1)[0, 0]), c='r', label='keys')
         # plt.show()
-        if ak is not None and ak['debug']:
-            akl['A_sm'] = attn_weights
 
         # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
         attn_weights = attn_weights.type(value.dtype)
@@ -286,9 +286,11 @@ class GPT2Attention(nn.Module):
                                     #  beta1=config.beta1, beta2=config.beta2, beta3=config.beta3)
         # self.hm.step()
 
-        akl['O'] = attn_output
-        if ak is not None:
-            ak['layers'].append(akl)
+        if ak is not None and ak['debug']:
+            if 'O' not in ak:
+                ak['O'] = attn_output[:, None]
+            else:
+                ak['O'] = torch.cat([ak['O'], attn_output[:, None]], dim=1)
 
         return attn_output, attn_weights
 
@@ -921,7 +923,11 @@ class GPT2Model(GPT2PreTrainedModel):
         # position_embeds = position_embeds[..., ridx1, :]
         # print('shuffling input embeddings: ', ridx2)
         # inputs_embeds = inputs_embeds[..., ridx2, :]
-        hidden_states = inputs_embeds + position_embeds
+        
+        if ak is None or 'use_pos' not in ak or ak['use_pos']:
+            hidden_states = inputs_embeds + position_embeds
+        else:
+            hidden_states = inputs_embeds
 
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)

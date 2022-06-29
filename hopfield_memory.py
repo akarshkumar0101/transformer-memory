@@ -7,7 +7,7 @@ import numpy as np
 from utils import smooth_max, softmax as sm
 
 class HopfieldMemory(nn.Module):
-    def __init__(self, shape, alpha=0.5, use_adaptive_alpha=False, opt='sgd', lr=1.):
+    def __init__(self, shape, alpha=1., use_uniform_steps=0., rigidity=1., opt='sgd', lr=1.):
         """
         shape is (..., m, d)
         d is the embedding dimension
@@ -32,25 +32,31 @@ class HopfieldMemory(nn.Module):
         self.Vm.requires_grad_(False)
         
         self.alpha = alpha
-        self.use_adaptive_alpha = use_adaptive_alpha
+        self.use_uniform_steps = use_uniform_steps
+        
+        self.activation_running_sum = torch.zeros(*self.Km.shape[:-1])
+        self.rigidity = rigidity
+        
+        self.lr = lr
         if opt=='sgd':
-            self.opt = torch.optim.SGD(self.parameters(), lr=lr, maximize=True)
+            self.opt = torch.optim.SGD(self.parameters(), lr=self.lr, maximize=True)
         elif opt=='adam':
-            self.opt = torch.optim.Adam(self.parameters(), lr=lr, maximize=True)
+            self.opt = torch.optim.Adam(self.parameters(), lr=self.lr, maximize=True)
 
     def reset(self, mag=0.1):
         self.Km.data[...] = mag*torch.randn_like(self.Km)
         self.Vm.data[...] = mag*torch.randn_like(self.Vm)
         
     # @torch.no_grad()
-    def set_target(self, Km_target, Vm_target=None, alpha=None):
-        if alpha is None:
-            alpha = self.alpha
+    def set_target(self, Km_target, Vm_target=None, step_size=None):
+        if step_size is None:
+            step_size = 1.
+            raise NotImplementedError()
 
         self.opt.zero_grad()
 
-        self.Km.grad = alpha*(Km_target-self.Km)
-        self.Vm.grad = alpha*(Vm_target-self.Vm) if Vm_target is not None else None
+        self.Km.grad = step_size*(Km_target-self.Km)
+        self.Vm.grad = step_size*(Vm_target-self.Vm) if Vm_target is not None else None
     
     def step(self):
         self.opt.step()
@@ -90,14 +96,25 @@ class HopfieldMemory(nn.Module):
         Km_target = Dc@Q # (..., m, d)
         Vm_target = Dc@O if O is not None else None # (..., m, d)
 
-        alpha = torch.full((*self.Km.shape[:-1], 1), fill_value=self.alpha, device=self.Km.device)
-        if self.use_adaptive_alpha:
-            alpha = alpha*smooth_max(sm(Am, beta1, -1), alpha=0., dim=-2)[..., None] # (..., m, 1)
+        # alpha = torch.full((*self.Km.shape[:-1], 1), fill_value=self.alpha, device=self.Km.device)
+        # if self.use_adaptive_alpha:
+        #     alpha = alpha*smooth_max(sm(Am, beta1, -1), alpha=0., dim=-2)[..., None] # (..., m, 1)
             # alpha = sm(alpha, beta3, -1)
-        self.used_alpha = alpha
-
-        self.set_target(Km_target, Vm_target, alpha=alpha)
+        # self.used_alpha = alpha
+        
+        
+        activation = sm(Am, beta1, -1).mean(dim=-2)
+        activation = activation / (1.+self.rigidity*self.activation_running_sum)
+        self.activation_running_sum += activation
+        step_size = activation/activation.sum(dim=-1, keepdim=True) # normalize
+        a = torch.ones_like(self.activation_running_sum)
+        step_uniform = a/a.sum(dim=-1, keepdim=True) # normalize
+        step_size = (1-self.use_uniform_steps)*step_size + (self.use_uniform_steps)*step_uniform
+        
+        self.set_target(Km_target, Vm_target, step_size=self.alpha*step_size[..., None])
         self.Am = Am
+        
+        return activation, step_size
         
     # @torch.no_grad()
     def set_target_with_data(self, Q, O=None, dist_metric='dot',
@@ -121,5 +138,5 @@ class HopfieldMemory(nn.Module):
         elif dist_metric=='euclidean':
             Am = -torch.linalg.norm(Q[..., :, None, :] - self.Km[..., None, :, :], dim=-1)
         
-        self.set_target_attn(Am, None, Q, None, None, O, beta1, beta2, beta3)
+        return self.set_target_attn(Am, None, Q, None, None, O, beta1, beta2, beta3)
         
