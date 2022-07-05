@@ -104,9 +104,10 @@ class HopfieldMemory(nn.Module):
         
         
         activation = sm(Am, beta1, -1).mean(dim=-2)
-        activation = activation / (1.+self.rigidity*self.activation_running_sum)
-        self.activation_running_sum += activation
-        step_size = activation/activation.sum(dim=-1, keepdim=True) # normalize
+        self.activation_running_sum = self.activation_running_sum.to(activation)
+        rigid_activation = activation / (1.+self.rigidity*self.activation_running_sum)
+        self.activation_running_sum += rigid_activation
+        step_size = rigid_activation/rigid_activation.sum(dim=-1, keepdim=True) # normalize
         a = torch.ones_like(self.activation_running_sum)
         step_uniform = a/a.sum(dim=-1, keepdim=True) # normalize
         step_size = (1-self.use_uniform_steps)*step_size + (self.use_uniform_steps)*step_uniform
@@ -114,11 +115,11 @@ class HopfieldMemory(nn.Module):
         self.set_target(Km_target, Vm_target, step_size=self.alpha*step_size[..., None])
         self.Am = Am
         
-        return activation, step_size
+        return activation, rigid_activation, step_size
         
     # @torch.no_grad()
     def set_target_with_data(self, Q, O=None, dist_metric='dot',
-                             beta1=1., beta2=1., beta3=1.):
+                             beta1=1., beta2=1., beta3=1., temp_normalize=False):
         """
         Am is (..., c, m)
         self.Km is (..., m, d)
@@ -135,6 +136,9 @@ class HopfieldMemory(nn.Module):
 
         if dist_metric=='dot':
             Am = Q@self.Km.transpose(-1, -2)
+            if temp_normalize:
+                Am = (Am-Am.mean(dim=(-1, -2), keepdim=True))/Am.std(dim=(-1, -2), keepdim=True)
+                # Am = Am/Am.max(dim=-1, keepdim=True).values.max(dim=-2,keepdim=True).values
         elif dist_metric=='euclidean':
             Am = -torch.linalg.norm(Q[..., :, None, :] - self.Km[..., None, :, :], dim=-1)
         

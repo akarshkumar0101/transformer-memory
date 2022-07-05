@@ -72,7 +72,7 @@ def experiment(args):
         input_ids_context = input_ids_all[None, begin_loc: end_loc].to(device)
         input_ids_memory = input_ids_all[None, begin_loc-n_memories: begin_loc].to(device)
 
-        # step['tokens_context'] = ''.join(tokens_all[begin_loc: end_loc]).replace('Ġ', ' ')
+        # step['tokens_context'] = ''.join(tokens_all[begin_loc: end_loc]).replace('', ' ')
 
         target_ids = input_ids_context.clone()
         target_ids[:, :-trg_len] = -100
@@ -81,7 +81,8 @@ def experiment(args):
 
             ak = {'debug': True, 'use_pos': use_pos}
             if memory_type is None or memory_type=='None':
-                ak['pKpV'] = None
+                # ak['pKpV'] = None
+                pK, pV = None, None
             else:
                 akp = {'debug': True, 'use_pos': use_pos}
                 _ = model(input_ids_memory, ak=akp)
@@ -91,14 +92,23 @@ def experiment(args):
                 A_sm = sm(A, 1/8., -1)
 
                 if memory_type=='KV':
-                    ak['pKpV'] = K.clone(), V.clone()
-                elif memory_type=='QV':
-                    ak['pKpV'] = Q.clone(), V.clone()
-                elif memory_type=='AQAV':
-                    ak['pKpV'] = Q.clone(), V.clone()
+                    # ak['pKpV'] = K.clone(), V.clone()
+                    pK, pV = K.clone(), V.clone()
+                elif memory_type=='QO':
+                    # ak['pKpV'] = Q.clone(), V.clone()
+                    pK, pV = Q.clone(), O.clone()
+                elif memory_type=='AKAV':
+                    # ak['pKpV'] = Q.clone(), V.clone()
+                    pK, pV = A_sm@K, A_sm@V
+                else:
+                    raise ValueError(f'Unknown memory type: {memory_type}')
 
+            # K.shape is [1, 6, 12, 100, 64]
+            # we need [[a, b], [], []] with each a, b of shape [1, 12, 100, 64]
 
-            outputs = model(input_ids_context, labels=target_ids, ak=ak)
+            past_key_values = [[Ki, Vi] for Ki, Vi in zip(pK.transpose(0, 1), pV.transpose(0, 1))] if pK is not None else None
+
+            outputs = model(input_ids_context, past_key_values=past_key_values, labels=target_ids, ak=ak)
             nll_i = outputs[0] * trg_len
             step['nll_i'] = nll_i.item()
             nlls.append(nll_i.item())
