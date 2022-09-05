@@ -1,6 +1,7 @@
 from tkinter import N
 from matplotlib import use
 from matplotlib.style import context
+from regex import P
 import torch
 from torch import nn
 import numpy as np
@@ -45,6 +46,13 @@ def experiment(args):
     stride = args.stride
     memory_type = args.memory_type
     use_pos = args.use_pos
+
+    
+    beta1, beta2 = 100., 1000.
+    alpha = 1.
+    hm = HopfieldMemory((1, 6, 12, n_memories, 64), alpha=alpha, use_uniform_steps=0., rigidity=0.).to(device)
+    hm.reset(1.)
+    hm_init=False
     
     steps = defaultdict(lambda: [])
     nlls = []
@@ -100,6 +108,18 @@ def experiment(args):
                 elif memory_type=='AKAV':
                     # ak['pKpV'] = Q.clone(), V.clone()
                     pK, pV = A_sm@K, A_sm@V
+                elif memory_type=='hopfield':
+                    if not hm_init:
+                        hm_init = True
+                        hm.reset(1.)
+                        hm.Km.data[...] = K.clone()
+                        hm.Vm.data[...] = V.clone()
+                        # hm.Km.data[...] = hm.Km.data[...]*K.std(dim=-2, keepdim=True)+K.mean(dim=-2, keepdim=True)
+                        # hm.Vm.data[...] = hm.Vm.data[...]*V.std(dim=-2, keepdim=True)+V.mean(dim=-2, keepdim=True)
+
+
+                    activation, rigid_activation, step_size = hm.set_target_with_data(K[..., :n_memories, :], V[..., :n_memories, :], beta1=beta1, beta2=beta2, temp_normalize=True)
+                    pK, pV = hm.Km.clone(), hm.Vm.clone()
                 else:
                     raise ValueError(f'Unknown memory type: {memory_type}')
 
@@ -108,12 +128,18 @@ def experiment(args):
 
             past_key_values = [[Ki, Vi] for Ki, Vi in zip(pK.transpose(0, 1), pV.transpose(0, 1))] if pK is not None else None
 
+            # print(input_ids_context.float().std(), target_ids.float().std())
             outputs = model(input_ids_context, past_key_values=past_key_values, labels=target_ids, ak=ak)
             nll_i = outputs[0] * trg_len
             step['nll_i'] = nll_i.item()
             nlls.append(nll_i.item())
             step['nll_avg'] = np.mean(nlls)
             step['ppl_avg'] = np.e**np.mean(nlls)
+
+            # print(K.shape)
+            # Q, K, V = ak['QKV']
+            # print(K.shape)
+            # print()
 
         if args.wandb:
             wandb.log(step)
@@ -170,6 +196,7 @@ def experiment(args):
     # plt.title(f'memory alphas over time for Layer {idx_layer_viz} head {idx_head_viz}')
     # plt.ylabel('Computed alpha')
     # plt.xlabel('Time step')
+    print(step['ppl_avg'])
 
     
 
