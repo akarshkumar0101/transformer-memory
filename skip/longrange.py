@@ -60,15 +60,15 @@ class LongRangeGPT(nn.Module):
             self.wpe = nn.Embedding(config["block_size"], config["n_embd"])
         self.drop = nn.Dropout(config["embd_pdrop"])
         self.blocks = nn.ModuleList(
-            [Block(idx_layer, config) for idx_layer in range(config["n_layer"])]
+            [Block(config) for idx_layer in range(config["n_layer"])]
         )
         # outputs a long-range representation
-        self.long_range_output_block = nn.ModuleList(
-            [Block(None, config) for idx_layer in range(3)]
+        self.long_range_output_blocks = nn.ModuleList(
+            [Block(config) for idx_layer in range(3)]
         )
         # takes as input a long-range representation
-        self.long_range_input_block = nn.ModuleList(
-            [Block(None, config) for idx_layer in range(3)]
+        self.long_range_input_blocks = nn.ModuleList(
+            [Block(config) for idx_layer in range(3)]
         )
         self.ln_f = nn.LayerNorm(config["n_embd"])
         self.lin_head = nn.Linear(config["n_embd"], config["n_vocab"], bias=False)
@@ -97,7 +97,7 @@ class LongRangeGPT(nn.Module):
 
         if calc_long_range_output:
             lro = x
-            for block in self.long_range_output_block:
+            for block in self.long_range_output_blocks:
                 lro = block(lro)
 
         for block in blocks2:
@@ -105,9 +105,9 @@ class LongRangeGPT(nn.Module):
 
         if long_range_input is not None:
             y = long_range_input
-            for block in self.long_range_input_block:
+            for block in self.long_range_input_blocks:
                 y = block(y)
-            x = blocks3[0].cross_attention_forward(x, torch.cat([x, y], dim=-2))
+            x = blocks3[0](x, torch.cat([y, x], dim=-2))
         else:
             x = blocks3[0](x)
         for block in blocks3[1:]:

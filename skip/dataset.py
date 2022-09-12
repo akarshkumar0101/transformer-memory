@@ -10,10 +10,10 @@ def create_dataset(dir_data="../data/Gutenberg/txt", percent_train=0.8, tqdm=Non
     for file in tqdm(os.listdir(dir_data)):
         file = dir_data + "/" + file
         try:
-            ids = parser.get_book_token_ids(file)
+            ids = parser.book2ids(file)
             if len(ids) > 0:
                 ds[file] = ids
-        except:
+        except Exception as e:
             pass
 
     books_all = sorted(list(ds.keys())).copy()

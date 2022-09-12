@@ -69,11 +69,19 @@ class Block(nn.Module):
             nn.Dropout(config["resid_pdrop"]),
         )
 
-    def forward(self, x, y=None):
+    def forward(self, x, y=None, mask='causal'):
         if y is None:
             y = x
+        if mask == 'full':
+            mask = None
+        if mask == 'causal':
+            nx, ny = x.shape[-2], y.shape[-2]
+            mask = ~torch.tril(torch.ones(nx, ny), diagonal=ny-nx).to(bool)
+
         lnx, lny = self.ln_1(x), self.ln_1(y)
-        x = x + self.attn(query=lnx, key=lny, value=lny, need_weights=False)[0]
+        a, b = self.attn(query=lnx, key=lny, value=lny, need_weights=True, attn_mask=mask)
+        self.attn_weights = b
+        x = x + self.attn(query=lnx, key=lny, value=lny, need_weights=False, attn_mask=mask)[0]
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -111,20 +119,20 @@ class GPT(nn.Module):
         pos_emb = self.wpe(pos)  # (1, cl, n_embd)
         x = self.drop(tok_emb + pos_emb)
 
-        print(x.shape)
+        # print(x.shape)
         if self.config['n_latent_tokens'] is None:
             x = self.blocks[0](x)
         else:
             nlt = self.config['n_latent_tokens']
             x = self.blocks[0](x=x[:, -nlt:, :], y=x)
-        print(x.shape)
+        # print(x.shape)
         for block in self.blocks[1:]:
             x = block(x)
-            print(x.shape)
+            # print(x.shape)
 
         x = self.ln_f(x)
         logits = self.lin_head(x)
-        print(logits.shape)
+        # print(logits.shape)
         return logits
 
 fn_cross_entropy = nn.CrossEntropyLoss()
@@ -133,9 +141,9 @@ fn_cross_entropy = nn.CrossEntropyLoss()
 def loss_fn(net, ids):
     inputs, targets = ids[..., :-1], ids[..., 1:]  # ..., context_length-1
     logits = net(inputs)  # -1, context_length-1, n_vocab
+    targets = targets[:, -logits.size(1) :] # -1, however many outputs we have
     loss = fn_cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
     return loss
-
 
 @torch.no_grad()
 def generate(
