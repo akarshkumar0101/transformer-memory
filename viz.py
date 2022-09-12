@@ -77,3 +77,32 @@ def imshow_unique_vecs(a):
     plt.title("Number of unique vectors")
     plt.ylabel('# of Layers'); plt.xlabel('# of Heads')
     plt.imshow(to_np(a)); plt.colorbar()
+    
+    
+def subplot_layers_heads(fn_plot, n_layers=6, n_heads=12, figsize=(20, 10),
+                         constrained_layout=True, sharex=True, sharey=True):
+    fig, axs = plt.subplots(n_layers, n_heads, figsize=figsize,
+                            constrained_layout=constrained_layout, sharex=sharex, sharey=sharey)
+    axs = np.array(axs)
+    while axs.ndim<2:
+        axs = axs[..., None]
+
+    for idx_layer in range(n_layers):
+        for idx_head in range(n_heads):
+            ax = axs[idx_layer, idx_head]
+            plt.sca(ax)
+            fn_plot(idx_layer, idx_head)
+    fig.supxlabel('Heads', fontsize=30)
+    fig.supylabel('Layers', fontsize=30)
+
+    # plt.tight_layout()
+    return fig
+
+def viz_A_Am_distribution(A, Am):
+    subplot_layers_heads(
+        lambda l, h: [plt.hist([to_np(A[l, h].flatten()), to_np(Am[l, h].flatten())], bins=30, label=['A', 'Am'])],
+        # 1,1,
+        sharex=False, sharey=False,
+    )
+    plt.legend()
+    plt.suptitle('Distribution of values of A=Q@K.T and Am=Q@Km.T', fontsize=30)
