@@ -1,5 +1,3 @@
-from __future__ import nested_scopes
-
 import math
 import os
 import sys
@@ -34,6 +32,7 @@ configs = {
     "gpt-mini": dict(n_layer=6, n_head=6, n_embd=192),
     "gpt-micro": dict(n_layer=4, n_head=4, n_embd=128),
     "gpt-nano": dict(n_layer=3, n_head=3, n_embd=48),
+    "gpt-ak": dict(n_layer=6, n_head=6, n_embd=384),
 }
 
 
@@ -69,18 +68,18 @@ class Block(nn.Module):
             nn.Dropout(config["resid_pdrop"]),
         )
 
-    def forward(self, x, y=None, mask='causal'):
+    def forward(self, x, y=None, mask='full'):
         if y is None:
             y = x
-        if mask == 'full':
+        if mask is None or mask == 'full':
             mask = None
         if mask == 'causal':
             nx, ny = x.shape[-2], y.shape[-2]
-            mask = ~torch.tril(torch.ones(nx, ny), diagonal=ny-nx).to(bool)
+            mask = ~torch.tril(torch.ones(nx, ny, device=x.device), diagonal=ny-nx).to(bool)
 
         lnx, lny = self.ln_1(x), self.ln_1(y)
-        a, b = self.attn(query=lnx, key=lny, value=lny, need_weights=True, attn_mask=mask)
-        self.attn_weights = b
+        # a, b = self.attn(query=lnx, key=lny, value=lny, need_weights=True, attn_mask=mask)
+        # self.attn_weights = b
         x = x + self.attn(query=lnx, key=lny, value=lny, need_weights=False, attn_mask=mask)[0]
         x = x + self.mlp(self.ln_2(x))
         return x
@@ -121,13 +120,13 @@ class GPT(nn.Module):
 
         # print(x.shape)
         if self.config['n_latent_tokens'] is None:
-            x = self.blocks[0](x)
+            x = self.blocks[0](x, mask='causal')
         else:
             nlt = self.config['n_latent_tokens']
-            x = self.blocks[0](x=x[:, -nlt:, :], y=x)
+            x = self.blocks[0](x=x[:, -nlt:, :], y=x, mask='causal')
         # print(x.shape)
         for block in self.blocks[1:]:
-            x = block(x)
+            x = block(x, mask='causal')
             # print(x.shape)
 
         x = self.ln_f(x)

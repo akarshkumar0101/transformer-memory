@@ -3,9 +3,12 @@ import torch
 
 # TODO rename this file
 
-def book2ids(book="../data/murder.txt"):
+def book2text(book="../data/murder.txt"):
     with open(book) as f:
-        return text2ids("".join(f.readlines()))
+        return "".join(f.readlines())
+    
+def book2ids(book="../data/murder.txt"):
+    return text2ids(book2text(book))
 
 def text2ids(text):
     text = text.encode(encoding="ascii", errors="ignore")

@@ -4,6 +4,8 @@ import parser
 import numpy as np
 import torch
 
+import util
+
 
 def create_dataset(dir_data="../data/Gutenberg/txt", percent_train=0.8, tqdm=None):
     ds = {}
@@ -24,6 +26,17 @@ def create_dataset(dir_data="../data/Gutenberg/txt", percent_train=0.8, tqdm=Non
 
     ds_train, ds_test = {k: ds[k] for k in books_train}, {k: ds[k] for k in books_test}
     return ds_train, ds_test
+
+def load_datasets(tqdm=None):
+    if os.path.exists('../data/datasets.pkl'):
+        print('Found existing dataset at ../data/datasets.pkl')
+        ds_train, ds_test = util.read_object('../data/datasets.pkl', default=(None, None))
+    else:
+        print('Did NOT find existing dataset at ../data/datasets.pkl, creating new one')
+        ds_train, ds_test = dataset.create_dataset(tqdm=tqdm)
+        util.write_object((ds_train, ds_test), '../data/datasets.pkl')
+    return ds_train, ds_test
+        
 
 
 def get_random_batches(ds, n_batches, batch_size, seq_len):

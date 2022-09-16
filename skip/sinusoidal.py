@@ -23,9 +23,9 @@ class PositionalEmbedding(nn.Module):
 def calc_fourier_position_embeddings(pos, config):
     dmodel = config["n_embd"]
     # pos.shape is (1, context_length)
-    pe = torch.zeros(*pos.shape, dmodel)
+    pe = torch.zeros(*pos.shape, dmodel, device=pos.device)
     pos = pos[..., None]
-    i2divdmodel = torch.arange(0, dmodel, 2) / dmodel
+    i2divdmodel = torch.arange(0, dmodel, 2, device=pos.device) / dmodel
     pe[..., ::2] = torch.sin(pos / 10000**i2divdmodel)
     pe[..., 1::2] = torch.cos(pos / 10000**i2divdmodel)
     return pe

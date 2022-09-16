@@ -33,6 +33,7 @@ configs = {
     "gpt-mini": dict(n_layer=6, n_head=6, n_embd=192),
     "gpt-micro": dict(n_layer=4, n_head=4, n_embd=128),
     "gpt-nano": dict(n_layer=3, n_head=3, n_embd=48),
+    "gpt-ak": dict(n_layer=6, n_head=6, n_embd=384),
 }
 
 def get_config(premade=None, **kwargs):
@@ -59,9 +60,11 @@ class LongRangeGPT(nn.Module):
         else:
             self.wpe = nn.Embedding(config["block_size"], config["n_embd"])
         self.drop = nn.Dropout(config["embd_pdrop"])
+        
         self.blocks = nn.ModuleList(
             [Block(config) for idx_layer in range(config["n_layer"])]
         )
+        
         # outputs a long-range representation
         self.long_range_output_blocks = nn.ModuleList(
             [Block(config) for idx_layer in range(3)]
@@ -73,7 +76,10 @@ class LongRangeGPT(nn.Module):
         self.ln_f = nn.LayerNorm(config["n_embd"])
         self.lin_head = nn.Linear(config["n_embd"], config["n_vocab"], bias=False)
 
-    def forward(self, ids, long_range_input=None, calc_long_range_output=False):
+    # def forward(self, ids, long_range_input=None, calc_long_range_output=False):
+    def forward(self, ids, lrr_memory=None, use_my_lrr_kv=False):
+        use_longterm_stack = use_my_lrr_kv or lrr_memory is not None
+        
         device = ids.device
         bs, context_length = ids.size()  # batch size, context length
         mcl = self.config["max_context_length"]
@@ -86,37 +92,41 @@ class LongRangeGPT(nn.Module):
         tok_emb = self.wte(ids)  # (b, cl, n_embd)
         pos_emb = self.wpe(pos)  # (1, cl, n_embd)
         x = self.drop(tok_emb + pos_emb)
+        
+        nlt = x.shape[-2] if self.config['n_latent_tokens'] else self.config['n_latent_tokens']
 
         nb_3 = len(self.blocks) // 3
         blocks1, blocks2, blocks3 = [
             self.blocks[i * nb_3 : (i + 1) * nb_3] for i in range(3)
         ]
 
-        for block in blocks1:
-            x = block(x)
+        x = self.blocks1[0](x=x[:, -nlt:, :], y=x, mask='causal') # Perceiver-AR Block
+        for block in blocks1[1:]: # Initial blocks
+            x = block(x, mask='causal')
 
-        if calc_long_range_output:
-            lro = x
-            for block in self.long_range_output_blocks:
-                lro = block(lro)
+        lrr = x
+        for block in self.long_range_output_blocks:
+            lrr = block(lrr, mask='full')
 
         for block in blocks2:
-            x = block(x)
+            x = block(x, mask='causal')
 
-        if long_range_input is not None:
-            y = long_range_input
-            for block in self.long_range_input_blocks:
-                y = block(y)
-            x = blocks3[0](x, torch.cat([y, x], dim=-2))
-        else:
-            x = blocks3[0](x)
+        lrr_d = lrr.detach()
+        y = torch.cat([lrr_memory, lrr_d], dim=-2) if use_my_lrr else lrr_memory
+        # print(y.shape)
+        y = self.long_range_input_blocks[0](lrr_d, y=y, mask='full')
+        for block in self.long_range_input_blocks[1:]:
+            y = block(y, mask='full')
+
+        print(x.shape, y.shape)
+        x = blocks3[0](x, torch.cat([y, x], dim=-2), mask='causal')
         for block in blocks3[1:]:
-            x = block(x)
+            x = block(x, mask='causal')
 
         x = self.ln_f(x)
         logits = self.lin_head(x)
 
-        return (logits, lro) if calc_long_range_output else (logits, None)
+        return logits, lrr
 
 
 def loss_fn_longrange(net, ids1, ids2):
@@ -173,3 +183,4 @@ def generate_ak(
         ids = torch.cat((ids, ids_next), dim=1)
 
     return ids
+
