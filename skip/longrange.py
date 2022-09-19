@@ -39,20 +39,23 @@ configs = {
 configs = {
     "transformer": dict(n_layer=6, n_head=6, n_embd=384),
     "perceiver": dict(n_layer=6, n_head=6, n_embd=384, n_latent_tokens=128),
-    "longrange1": dict(n_layer=6, n_head=6, n_embd=384, share_memory_creator_retreiver=False),
-    "longrange2": dict(n_layer=6, n_head=6, n_embd=384, share_memory_creator_retreiver=True),
+    "longrange1": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False),
+    "longrange2": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=True),
 }
 
 def get_config(premade=None, **kwargs):
     config = default_config.copy()
     if premade is not None:
         config.update(configs[premade])
+    if 'use_memory' not in config:
+        config['use_memory'] = False
+    if 'share_cr' not in config:
+        config['share_cr'] = False
     config.update(kwargs)
     return config
 
 
 # Code from https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
-
 
 class LongRangeGPT(nn.Module):
     """GPT Language Model"""
@@ -70,25 +73,25 @@ class LongRangeGPT(nn.Module):
         self.drop = nn.Dropout(config["embd_pdrop"])
         
         assert config['n_layer']%3 == 0
+        nb_3 = config['n_layer']//3
         self.blocks_main = nn.ModuleList(
             [Block(config) for idx_layer in range(config["n_layer"])]
         )
-        # outputs a long-range representation
-        self.blocks_memory_creator = nn.ModuleList(
-            [Block(config) for idx_layer in range(config["n_layer"])]
-        )
-        # inputs a long-range representation
-        self.blocks_memory_retreiver = nn.ModuleList(
-            [Block(config) for idx_layer in range(config["n_layer"])]
-        )
-        self.share_memory_creator_retreiver = config['share_memory_creator_retreiver']
         
-        # self.long_range_output_blocks = nn.ModuleList(
-        #     [Block(config) for idx_layer in range(3)]
-        # )
-        # self.long_range_input_blocks = nn.ModuleList(
-        #     [Block(config) for idx_layer in range(3)]
-        # )
+        if config['use_memory']:
+            # outputs a long-range memory representation
+            self.blocks_memory_creator = nn.ModuleList(
+                [Block(config) for idx_layer in range(nb_3)]
+            )
+            # inputs a long-range memory representation
+            self.blocks_memory_retreiver = nn.ModuleList(
+                [Block(config) for idx_layer in range(nb_3)]
+            )
+
+            # share_memory_creator_retreiver
+        self.share_cr = config['share_cr']
+        
+        
         self.ln_f = nn.LayerNorm(config["n_embd"])
         self.lin_head = nn.Linear(config["n_embd"], config["n_vocab"], bias=False)
 
@@ -97,7 +100,7 @@ class LongRangeGPT(nn.Module):
         # use_longterm_stack = use_my_lrr_kv or lrr_memory is not None
         
         device = ids.device
-        bs, context_length = ids.size()  # batch size, context length
+        bs, context_length = ids.size() # batch size, context length
         mcl = self.config["max_context_length"]
         assert mcl is None or context_length <= mcl
 
@@ -115,49 +118,48 @@ class LongRangeGPT(nn.Module):
         blocks1, blocks2, blocks3 = [
             self.blocks_main[i * nb_3 : (i + 1) * nb_3] for i in range(3)
         ]
-        nbm_2 = len(self.blocks_memory_retreiver) // 2
-        blocks_mr1, blocks_mr2 = [
-            self.blocks_main[i * nbm_2 : (i + 1) * nbm_2] for i in range(2)
-        ]
+        if self.config['use_memory']:
+            nbm_2 = len(self.blocks_memory_retreiver) // 2
+            blocks_mr1, blocks_mr2 = [
+                self.blocks_main[i * nbm_2 : (i + 1) * nbm_2] for i in range(2)
+            ]
 
         x = blocks1[0](x=x[:, -nlt:, :], y=x, mask='causal') # Perceiver-AR Block
         for block in blocks1[1:]: # Main transformer first third
             x = block(x, mask='causal')
-        print('main - First third')
-
-        share = self.share_memory_creator_retreiver
+        # print('main - First third')
 
         memory_retreival = x
-        if (share and calc_memory_out) or (memory_in is not None):
+        if (self.share_cr and calc_memory_out) or (memory_in is not None):
             for block in blocks_mr1: # Memory retreival first half
                 memory_retreival = block(memory_retreival, mask='causal')
-            print('retreival - First half')
+            # print('retreival - First half')
         if calc_memory_out: # Create memory output
-            memory_created = memory_retreival if share else x # share processing step if needed
+            memory_created = memory_retreival if self.share_cr else x # share processing step if needed
             for block in self.blocks_memory_creator: # memory output blocks
                 memory_created = block(memory_created, mask='full')
-            print(f'creation - using {share=}')
+            # print(f'creation - using {share=}')
 
         if memory_in is not None: # Use memory input
             # Merge in memory input where local context ONLY gives queries
             memory_retreival = blocks_mr2[0](x=memory_retreival, y=memory_in, mask='full')
             for block in blocks_mr2[1:]: # Memory retreival second half
                 memory_retreival = block(memory_retreival, mask='causal')
-            print('retreival - second half')
+            # print('retreival - second half')
 
         for block in blocks2: # Main transformer second third
             x = block(x, mask='causal')
-        print('main - second third')
+        # print('main - second third')
 
         if memory_in is not None: # Merge memory into main
            x = blocks3[0](x=x, y=torch.cat([memory_retreival, x], dim=-2), mask='causal')
-           print('merging of memory!')
+           # print('merging of memory!')
         else:
            x = blocks3[0](x, mask='causal') # Don't merge memory into main
-           print('no merging of memory')
+           # print('no merging of memory')
         for block in blocks3[1:]: # Main transformer third/last third
             x = block(x, mask='causal')
-        print('main - third third')
+        # print('main - third third')
 
         x = self.ln_f(x)
         logits = self.lin_head(x)
@@ -179,6 +181,13 @@ def loss_fn_longrange(net, ids1, ids2):
         logits2.reshape(-1, logits2.size(-1)), targets2.reshape(-1)
     )
     loss = (loss1 + loss2) / 2.0
+    return loss, loss1, loss2
+
+def loss_fn(net, ids):
+    inputs, targets = ids[..., :-1], ids[..., 1:]  # ..., context_length-1
+    logits, _ = net.forward(inputs)  # -1, context_length-1, n_vocab
+    targets = targets[:, -logits.size(1) :] # -1, however many outputs we have
+    loss = fn_cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
     return loss
 
 
@@ -201,7 +210,7 @@ def generate_ak(
         # if the sequence context is growing too long we must crop it at block_size
         ids_cond = ids if max_context_length is None else ids[:, -max_context_length:]
         # forward the model to get the logits for the index in the sequence
-        logits = model(ids_cond)
+        logits, _ = model(ids_cond)
         # pluck the logits at the final step and scale by desired temperature
         logits = logits[:, -1, :] / temperature
         # optionally crop the logits to only the top k options

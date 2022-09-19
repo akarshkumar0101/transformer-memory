@@ -9,8 +9,12 @@ import util
 
 def create_dataset(dir_data="../data/Gutenberg/txt", percent_train=0.8, tqdm=None):
     ds = {}
-    for file in tqdm(os.listdir(dir_data)):
-        file = dir_data + "/" + file
+    files = os.listdir(dir_data)
+    print(f'Loading {len(files)} books')
+    files = [f'{dir_data}/{file}' for file in files]
+    
+    pbar = tqdm(files) if tqdm is not None else files
+    for file in pbar:
         try:
             ids = parser.book2ids(file)
             if len(ids) > 0:
@@ -27,13 +31,14 @@ def create_dataset(dir_data="../data/Gutenberg/txt", percent_train=0.8, tqdm=Non
     ds_train, ds_test = {k: ds[k] for k in books_train}, {k: ds[k] for k in books_test}
     return ds_train, ds_test
 
-def load_datasets(tqdm=None):
+
+def load_dataset(tqdm=None):
     if os.path.exists('../data/datasets.pkl'):
         print('Found existing dataset at ../data/datasets.pkl')
         ds_train, ds_test = util.read_object('../data/datasets.pkl', default=(None, None))
     else:
         print('Did NOT find existing dataset at ../data/datasets.pkl, creating new one')
-        ds_train, ds_test = dataset.create_dataset(tqdm=tqdm)
+        ds_train, ds_test = create_dataset(tqdm=tqdm)
         util.write_object((ds_train, ds_test), '../data/datasets.pkl')
     return ds_train, ds_test
         
