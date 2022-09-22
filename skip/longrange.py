@@ -38,7 +38,7 @@ configs = {
 
 configs = {
     "transformer": dict(n_layer=6, n_head=6, n_embd=384),
-    "perceiver": dict(n_layer=6, n_head=6, n_embd=384, n_latent_tokens=128),
+    "perceiver": dict(n_layer=6, n_head=6, n_embd=384, n_latent_tokens=64),
     "longrange1": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False),
     "longrange2": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=True),
 }
@@ -84,13 +84,12 @@ class LongRangeGPT(nn.Module):
                 [Block(config) for idx_layer in range(nb_3)]
             )
             # inputs a long-range memory representation
-            self.blocks_memory_retreiver = nn.ModuleList(
-                [Block(config) for idx_layer in range(nb_3)]
+            self.blocks_memory_retriever = nn.ModuleList(
+                [Block(config) for idx_layer in range(nb_3*2)]
             )
 
-            # share_memory_creator_retreiver
+            # share_memory_creator_retriever
         self.share_cr = config['share_cr']
-        
         
         self.ln_f = nn.LayerNorm(config["n_embd"])
         self.lin_head = nn.Linear(config["n_embd"], config["n_vocab"], bias=False)
@@ -107,7 +106,6 @@ class LongRangeGPT(nn.Module):
         pos = torch.arange(0, context_length, dtype=torch.long, device=device)[None]
         # shape (1, t)
 
-        # forward the GPT model itself
         tok_emb = self.wte(ids)  # (b, cl, n_embd)
         pos_emb = self.wpe(pos)  # (1, cl, n_embd)
         x = self.drop(tok_emb + pos_emb)
@@ -115,51 +113,63 @@ class LongRangeGPT(nn.Module):
         nlt = x.shape[-2] if self.config['n_latent_tokens'] is None else self.config['n_latent_tokens']
 
         nb_3 = len(self.blocks_main) // 3
-        blocks1, blocks2, blocks3 = [
-            self.blocks_main[i * nb_3 : (i + 1) * nb_3] for i in range(3)
-        ]
+        blocks1, blocks2, blocks3 = [self.blocks_main[i*nb_3:(i+1)*nb_3] for i in range(3)]
         if self.config['use_memory']:
-            nbm_2 = len(self.blocks_memory_retreiver) // 2
-            blocks_mr1, blocks_mr2 = [
-                self.blocks_main[i * nbm_2 : (i + 1) * nbm_2] for i in range(2)
-            ]
+            nbm_2 = len(self.blocks_memory_retriever) // 2
+            blocks_mr1, blocks_mr2 = [self.blocks_memory_retriever[i*nbm_2:(i+1)*nbm_2] for i in range(2)]
+            
 
+        # print('pre first ', x.shape)
         x = blocks1[0](x=x[:, -nlt:, :], y=x, mask='causal') # Perceiver-AR Block
+        # print('post first ', x.shape)
         for block in blocks1[1:]: # Main transformer first third
             x = block(x, mask='causal')
         # print('main - First third')
+        # print(x.shape)
 
         memory_retreival = x
         if (self.share_cr and calc_memory_out) or (memory_in is not None):
             for block in blocks_mr1: # Memory retreival first half
                 memory_retreival = block(memory_retreival, mask='causal')
             # print('retreival - First half')
+            # print(memory_retreival.shape)
         if calc_memory_out: # Create memory output
             memory_created = memory_retreival if self.share_cr else x # share processing step if needed
             for block in self.blocks_memory_creator: # memory output blocks
                 memory_created = block(memory_created, mask='full')
-            # print(f'creation - using {share=}')
+            # print(f'creation - using {self.share_cr=}')
+            # print(memory_created.shape)
 
         if memory_in is not None: # Use memory input
             # Merge in memory input where local context ONLY gives queries
+            # print()
+            # print(memory_retreival.shape, memory_in.shape)
             memory_retreival = blocks_mr2[0](x=memory_retreival, y=memory_in, mask='full')
+            # print('cross attn memory retrieval and memory_in')
+            # print(memory_retreival.shape)
+            # print()
             for block in blocks_mr2[1:]: # Memory retreival second half
                 memory_retreival = block(memory_retreival, mask='causal')
             # print('retreival - second half')
+            # print(memory_retreival.shape)
 
         for block in blocks2: # Main transformer second third
             x = block(x, mask='causal')
         # print('main - second third')
+        # print(x.shape)
 
         if memory_in is not None: # Merge memory into main
-           x = blocks3[0](x=x, y=torch.cat([memory_retreival, x], dim=-2), mask='causal')
-           # print('merging of memory!')
+            x = blocks3[0](x=x, y=torch.cat([memory_retreival, x], dim=-2), mask='doublecausal')
+            # print('merging of memory!')
+            # print(x.shape)
         else:
-           x = blocks3[0](x, mask='causal') # Don't merge memory into main
-           # print('no merging of memory')
+            x = blocks3[0](x, mask='causal') # Don't merge memory into main
+            # print('no merging of memory')
+            # print(x.shape)
         for block in blocks3[1:]: # Main transformer third/last third
             x = block(x, mask='causal')
         # print('main - third third')
+        # print(x.shape)
 
         x = self.ln_f(x)
         logits = self.lin_head(x)

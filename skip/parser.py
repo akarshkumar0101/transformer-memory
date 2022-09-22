@@ -1,4 +1,5 @@
 import re
+import csv
 import nltk
 
 import numpy as np
@@ -54,7 +55,7 @@ def tokenize_word_idx_re(text):
     tokens, idxs = np.array(tokens), np.array(idxs)
     return tokens, idxs
 
-def process_text(text, word2fbin):
+def process_text(text, word2fbin, detailed=False):
     # we only want 32 to 126 inclusive
     possible_chrs = {ord('\n')}.union(set(range(32, 126+1)))
     
@@ -76,7 +77,10 @@ def process_text(text, word2fbin):
     # word tokens, locations of word tokens in text
     # frequency bin of each word
     # frequency bin of each (first character in word) and -2 for all other characters
-    return dict(text=text, ids=ids, words=words, idx_words=idx_words, fbin_words=fbin_words, fbin_fchars=fbin_fchars)
+    if detailed:
+        return dict(text=text, ids=ids, words=words, idx_words=idx_words, fbin_words=fbin_words, fbin_fchars=fbin_fchars)
+    else:
+        return dict(ids=ids, fbin_fchars=fbin_fchars)
 
 def calc_fbin2wordset(word2freq, n_bins=9, strategy='uniform'):
     # in a frequency vs word rank chart

@@ -67,20 +67,35 @@ class Block(nn.Module):
             nn.Linear(4 * config["n_embd"], config["n_embd"]),
             nn.Dropout(config["resid_pdrop"]),
         )
+        self.attn_weights = None
 
     def forward(self, x, y=None, mask='full'):
         if y is None:
             y = x
+        # print(mask)
         if mask is None or mask == 'full':
             mask = None
         if mask == 'causal':
             nx, ny = x.shape[-2], y.shape[-2]
             mask = ~torch.tril(torch.ones(nx, ny, device=x.device), diagonal=ny-nx).to(bool)
+        if mask == 'doublecausal':
+            # cross attention but don't attend to stuff ahead in the other seq
+            nx, ny = x.shape[-2], y.shape[-2]
+            ny = nx
+            mask = ~torch.tril(torch.ones(nx, ny, device=x.device), diagonal=ny-nx).to(bool)
+            mask = torch.cat([mask, mask], dim=-1)
+            # plt.imshow(mask.detach().cpu().numpy())
+            # plt.show()
+            # print('akakak')
+            # print(mask.shape)
 
         lnx, lny = self.ln_1(x), self.ln_1(y)
-        # a, b = self.attn(query=lnx, key=lny, value=lny, need_weights=True, attn_mask=mask)
-        # self.attn_weights = b
-        x = x + self.attn(query=lnx, key=lny, value=lny, need_weights=False, attn_mask=mask)[0]
+        
+        attn_output, attn_weights = self.attn(query=lnx, key=lny, value=lny, need_weights=True, attn_mask=mask, average_attn_weights=False)
+        self.attn_weights = attn_weights.detach().clone()
+        # print(attn_weights.shape, self.wtf.shape)
+        # x = x + self.attn(query=lnx, key=lny, value=lny, need_weights=False, attn_mask=mask)[0]
+        x = x + attn_output
         x = x + self.mlp(self.ln_2(x))
         return x
 
