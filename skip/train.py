@@ -12,18 +12,16 @@ import longrange
 import transformer
 import util
 
-
-def train_transformer(ds, net, n_batches=10, batch_size=32, seq_len=100, lr=1e-2, device='cpu', wandb=None, tqdm=None):
-    net = net.to(device)
-    net.train()
+def train_transformer(ds, net, n_batches=10, batch_size=32, seq_len=100, lr=1e-3, device='cpu', wandb=None, tqdm=None):
+    net.to(device).train()
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     
-    pbar = dataset.get_random_batches(ds, n_batches, batch_size, seq_len)
+    pbar = dataset.get_seq_batches(ds, n_batches, batch_size, n_seqs=1, seq_len=seq_len, min_dist=0, max_dist=1, unbind=True)
     pbar = pbar if tqdm is None else tqdm(pbar, total=n_batches)
-    for batch in pbar:
-        batch = batch.to(device).long()
+    for (batch1,), (batch1fchar,) in pbar:
+        batch1 = batch1.to(device).long()
 
-        loss = longrange.loss_fn(net, batch)
+        loss = longrange.loss_fn(net, batch1)
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -33,130 +31,69 @@ def train_transformer(ds, net, n_batches=10, batch_size=32, seq_len=100, lr=1e-2
         if wandb is not None:
             wandb.log(dict(loss=loss.item()))
 
-def train_longrange(ds, net, n_batches=10, batch_size=32, seq_len=100, lr=1e-2, device='cpu', wandb=None, tqdm=None):
-    net = net.to(device)
-    net.train()
+import akutil
+
+def train_longrange(ds, net, n_batches=10, batch_size=32, seq_len=100, lr=1e-3, device='cpu', wandb=None, tqdm=None):
+    akl = akutil.AKLog()
+    net.to(device).train()
     opt = torch.optim.Adam(net.parameters(), lr=lr)
+    # scheduler = torch.optim.MultiStepLR(opt, milestones=[1000], gamma=0.1)
 
-    pbar = dataset.get_random_skip_batches(ds, n_batches, batch_size, seq_len, min_dist=4*seq_len, max_dist=10*seq_len)
+
+    # pbar = dataset.get_seq_batches(ds, n_batches, batch_size, n_seqs=2, seq_len=seq_len, min_dist=0, max_dist=seq_len, unbind=True)
+    pbar = dataset.get_seq_batches(ds, n_batches, batch_size, n_seqs=2, seq_len=seq_len, min_dist=0, max_dist=1, unbind=False, device=device)
     pbar = pbar if tqdm is None else tqdm(pbar, total=n_batches)
-    for batch1, batch2 in pbar:
-        batch1, batch2 = batch1.to(device).long(), batch2.to(device).long()
+    # for (batch1, batch2), (batch1fchar, batch2fchar) in pbar:
+    for idx_batch, (batch_ids, batch_fbin) in enumerate(pbar):
+        # batch1, batch2 = batch1.to(device).long(), batch2.to(device).long()
 
-        loss, loss1, loss2 = longrange.loss_fn_longrange(net, batch1, batch2)
+        losses, _ = longrange.loss_fn_longrange(net, batch_ids, batch_fbin)
+        loss1, loss2 = losses[:, 0].mean(), losses[:, 1].mean()
+        loss = losses.mean()
         opt.zero_grad()
         loss.backward()
+        
+        log_network_stats(akl, net)
+        
         opt.step()
-
+        
+        akl.put(loss=loss.item(), loss1=loss1.item(), loss2=loss2.item())
         if tqdm is not None:
             pbar.set_postfix(dict(loss=loss.item(), loss1=loss1.item(), loss2=loss2.item()))
+            # pbar.set_postfix(dict(loss=loss.item()))
         if wandb is not None:
             wandb.log(dict(loss=loss.item(), loss1=loss1.item(), loss2=loss2.item()))
             
-# def train(ds, net, n_batches=10, batch_size=32, seq_len=100, lr=1e-2, device='cpu', wandb=None, tqdm=None):
-#     net = net.to(device)
-#     net.train()
-#     opt = torch.optim.Adam(net.parameters(), lr=lr)
-
-#     longrange = False
-#     if longrange:
-#         pbar = dataset.get_random_skip_batches(ds, n_batches, batch_size, seq_len, min_dist=4*seq_len, max_dist=10*seq_len)
-#     else:
-#         pbar = dataset.get_random_batches(ds, n_batches, batch_size, seq_len)
-#     pbar = pbar if tqdm is None else tqdm(pbar, total=n_batches)
-#     for batch in pbar:
-#         # batch = batch.to(device).long()
-#         # if longrange:
-#             # batch1, batch2 = 
+        akl.next_ts()
+    return akl
             
-
-#         loss = longrange.loss_fn(net, batch)
-#         opt.zero_grad()
-#         loss.backward()
-#         opt.step()
-
-#         if tqdm is not None:
-#             pbar.set_postfix(dict(loss=loss.item()))
-#         if wandb is not None:
-#             wandb.log(dict(loss=loss.item()))
-#     for batch1, batch2 in pbar:
-#         batch1, batch2 = batch1.to(device).long(), batch2.to(device).long()
-
-#         loss, loss1, loss2 = longrange.loss_fn_longrange(net, batch1, batch2)
-#         opt.zero_grad()
-#         loss.backward()
-#         opt.step()
-
-#         if tqdm is not None:
-#             pbar.set_postfix(dict(loss=loss.item(), loss1=loss1.item(), loss2=loss2.item()))
-#         if wandb is not None:
-#             wandb.log(dict(loss=loss.item(), loss1=loss1.item(), loss2=loss2.item()))
+def log_network_stats(akl, net):
+    grad_mag = [block.attn.out_proj.weight.grad.norm().item() for block in net.blocks_main]
+    akl.put(grad_blocks_main=grad_mag)
+    grad_mag = [block.attn.out_proj.weight.grad.norm().item() for block in net.blocks_memory_retriever]
+    akl.put(grad_blocks_retriever=grad_mag)
+    grad_mag = [block.attn.out_proj.weight.grad.norm().item() for block in net.blocks_memory_creator]
+    akl.put(grad_blocks_creator=grad_mag)
+    if akl.ts%20==0:
+        for name, module in net.named_modules():
+            if isinstance(module, transformer.Block):
+                key = f'attn_mat_{name}'
+                akl.put(**{key: module.attn_weights.detach().cpu().numpy()})
     
-
-def main():
-    args = parser.parse_args()
-    print(args)
-
-    print('Loading dataset...')
-    ds_train, ds_test = dataset.load_dataset(tqdm=tqdm)
-
-    print(args.model)
-    np.random.seed(args.seed); torch.manual_seed(0)
-    config_net = longrange.get_config(args.model)
-    net = longrange.LongRangeGPT(**config_net)
-    # if args.model == 'transformer':
-    #     config = transformer.get_config('gpt-ak')
-    #     net = transformer.GPT(config)
-    #     train_fn = train_transformer
-    # elif args.model == 'perceiver':
-    #     config = transformer.get_config('gpt-ak', n_latent_tokens=args.n_latent_tokens)
-    #     net = transformer.GPT(config)
-    #     train_fn = train_transformer
-    # elif args.model == 'longrange':
-    #     config = longrange.get_config('gpt-ak')
-    #     net = longrange.LongRangeGPT(config)
-    #     train_fn = train_longrange
-    print(f'Model config: {config_net}')
-    print(f'Model # of parameters: {util.count_params(net)}')
+def print_network_gradient_stats(net):
+    print('Main blocks gradient mag:')
+    for block in net.blocks_main:
+        gradmag = block.attn.out_proj.weight.grad.norm().item()
+        print(f'{gradmag: .3e}', end=' ')
+    print()
+    print('Memory Retrieval blocks gradient mag:')
+    for block in net.blocks_memory_retriever:
+        gradmag = block.attn.out_proj.weight.grad.norm().item()
+        print(f'{gradmag: .3e}', end=' ')
+    print()
+    print('Memory Creator blocks gradient mag:')
+    for block in net.blocks_memory_creator:
+        gradmag = block.attn.out_proj.weight.grad.norm().item()
+        print(f'{gradmag: .3e}', end=' ')
+    print()
     
-    config = vars(args)
-    config['config_net'] = config_net
-    
-    train_fn = train_longrange if config_net['use_memory'] else train_transformer
-    
-    if args.wandb:
-        wandb.init(config=config)
-    net.train()
-    train_fn(ds_train, net, n_batches=args.n_batches, batch_size=args.batch_size,
-             seq_len=args.seq_len, lr=args.lr, device=args.device, wandb=wandb if args.wandb else None, tqdm=tqdm)
-    if args.wandb:
-        net.eval()
-        net = net.cpu()
-        torch.save(net, f'../results/{wandb.run.name}.net')
-
-
-parser = argparse.ArgumentParser(description='Train a model.')
-parser.add_argument('--model', type=str, default='longrange')
-parser.add_argument('--n_batches', type=int, default=10000)
-parser.add_argument('--batch_size', type=int, default=128)
-parser.add_argument('--seq_len', type=int, default=64)
-parser.add_argument('--n_latent_tokens', type=int, default=None)
-parser.add_argument('--device', type=str, default='cpu')
-parser.add_argument('--seed', type=int, default=0)
-parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False)
-
-
-parser.add_argument('--lr', type=float, default=1e-3)
-
-if __name__ == '__main__':
-    main()
-
-"""
-python train.py --device cuda:0 --model transformer --seq_len 64 --seed 0
-
-python train.py --device cuda:1 --model perceiver --seq_len 128 --seed 0
-python train.py --device cuda:2 --model perceiver --seq_len 256 --seed 0
-python train.py --device cuda:0 --model perceiver --seq_len 512 --seed 0
-
-python train.py --device cuda:3 --model longrange1 --seq_len 64 --batch_size 64 --seed 0
-"""

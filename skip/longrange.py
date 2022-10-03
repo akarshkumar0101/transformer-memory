@@ -41,6 +41,7 @@ configs = {
     "perceiver": dict(n_layer=6, n_head=6, n_embd=384, n_latent_tokens=64),
     "longrange1": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False),
     "longrange2": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=True),
+    "longrange3": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False, memory_cross_attn_only=False),
 }
 
 def get_config(premade=None, **kwargs):
@@ -51,6 +52,8 @@ def get_config(premade=None, **kwargs):
         config['use_memory'] = False
     if 'share_cr' not in config:
         config['share_cr'] = False
+    if 'memory_cross_attn_only' not in config:
+        config['memory_cross_attn_only'] = True
     config.update(kwargs)
     return config
 
@@ -90,6 +93,7 @@ class LongRangeGPT(nn.Module):
 
             # share_memory_creator_retriever
         self.share_cr = config['share_cr']
+        self.memory_cross_attn_only = config['memory_cross_attn_only']
         
         self.ln_f = nn.LayerNorm(config["n_embd"])
         self.lin_head = nn.Linear(config["n_embd"], config["n_vocab"], bias=False)
@@ -144,7 +148,10 @@ class LongRangeGPT(nn.Module):
             # Merge in memory input where local context ONLY gives queries
             # print()
             # print(memory_retreival.shape, memory_in.shape)
-            memory_retreival = blocks_mr2[0](x=memory_retreival, y=memory_in, mask='full')
+            if self.memory_cross_attn_only:
+                memory_retreival = blocks_mr2[0](x=memory_retreival, y=memory_in, mask='full')
+            else:
+                memory_retreival = blocks_mr2[0](x=memory_retreival, y=torch.cat([memory_retreival, memory_in], dim=-2), mask='causal')
             # print('cross attn memory retrieval and memory_in')
             # print(memory_retreival.shape)
             # print()
@@ -193,6 +200,7 @@ def loss_fn_longrange(net, ids1, ids2):
     loss = (loss1 + loss2) / 2.0
     return loss, loss1, loss2
 
+
 def loss_fn(net, ids):
     inputs, targets = ids[..., :-1], ids[..., 1:]  # ..., context_length-1
     logits, _ = net.forward(inputs)  # -1, context_length-1, n_vocab
@@ -200,6 +208,37 @@ def loss_fn(net, ids):
     loss = fn_cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
     return loss
 
+def loss_fn_longrange(net, batch_ids, batch_fbin):
+    """
+    Computes losses using long-range memory
+    - batch_ids is of shape (bs, n_seqs, seq_len)
+    - batch_fbin is of shape (bs, n_seqs, seq_len)
+    
+    Returns 
+    - losses of shape bs, n_seqs, seq_len-1
+    - fbin2loss is dictionary from fbin to [loss for each seq in n_seqs]
+    """
+    bs, n_seqs, seq_len = batch_ids.shape
+    loss_fn = nn.CrossEntropyLoss(reduction='none')
+    
+    fbin2loss = {fbin: torch.full((n_seqs, ), torch.nan) for fbin in range(-2, 9)}
+    losses = []
+    import parser
+    
+    memory = None
+    for idx_seq, (ids_seq, fbin_seq) in enumerate(zip(batch_ids.unbind(dim=-2), batch_fbin.unbind(dim=-2))):
+        fbin_seq = fbin_seq[..., 1:]
+        inputs, targets = ids_seq[..., :-1], ids_seq[..., 1:] # ..., context_length-1
+        logits, memory_out = net.forward(inputs, memory_in=memory, calc_memory_out=net.config['use_memory'])
+        memory = memory_out if memory is None else torch.cat([memory, memory_out], dim=-2)
+        
+        loss = loss_fn(logits.reshape(-1, logits.size(-1)), targets.reshape(-1)).reshape(bs, -1)
+        losses.append(loss)
+        
+        for fbin in fbin_seq.unique().sort().values.tolist():
+            fbin2loss[fbin][idx_seq] = loss.flatten()[fbin_seq.flatten()==fbin].mean().item()
+    losses = torch.stack(losses, dim=-2)
+    return losses, fbin2loss
 
 @torch.no_grad()
 def generate_ak(

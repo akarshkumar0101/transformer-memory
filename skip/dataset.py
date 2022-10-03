@@ -116,7 +116,7 @@ cidx_last = N-C
 
 """
 
-def get_random_batches_new(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=None, max_dist=None, unbind=True):
+def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=None, max_dist=None, unbind=True, device='cpu', dtype=torch.long):
     """
     ds is the dataset
     n_batches in the number of batches to loop over
@@ -145,7 +145,7 @@ def get_random_batches_new(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=
             fbin_fchars = torch.as_tensor(ds[book]['fbin_fchars'], dtype=torch.int8)
             
             # create max_dist_book based on book len or whatever max dist is
-            max_dist_book = min(max_dist, (len(ids)-seq_len*n_seqs)//(n_seqs-1)+1)
+            max_dist_book = min(max_dist, (len(ids)-seq_len*n_seqs)//(n_seqs-1)+1 if n_seqs>1 else min_dist+1)
             # min_dist_book = min(
             
             gaps = np.random.randint(low=min_dist, high=max_dist_book, size=n_seqs)
@@ -163,10 +163,17 @@ def get_random_batches_new(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=
             batch_ids.append(torch.stack([ids[start: end] for start, end in zip(starts, ends)]))
             batch_fbin.append(torch.stack([fbin_fchars[start: end] for start, end in zip(starts, ends)]))
         batch_ids, batch_fbin = torch.stack(batch_ids), torch.stack(batch_fbin)
+        batch_ids, batch_fbin = batch_ids.to(device).to(dtype), batch_fbin.to(device).to(dtype)
         if unbind:
             yield batch_ids.unbind(dim=-2), batch_fbin.unbind(dim=-2)
         else:
             yield batch_ids, batch_fbin
+        # -2 for all characters
+        # -1 for first character of unknown word
+        # 0 for first character of common words
+        # 1 for first character of second common words
+        # 2 for first character of third common words
+        # ... for first character of ... common words
 
             
  

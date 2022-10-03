@@ -43,10 +43,58 @@ def get_config(premade=None, **kwargs):
     config.update(kwargs)
     return config
 
+# Code from https://ai.stackexchange.com/questions/35548/when-exactly-does-the-split-into-different-heads-in-multi-head-attention-occur
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, n_heads, d_k=None, d_v=None, dropout=0.1):
+        super().__init__()
+        self.d_model, self.n_heads = d_model, n_heads
+        if d_k is None:
+            d_k = self.d_model//self.n_heads
+            d_v = self.d_model//self.n_heads
+        
+        self.w_qs = nn.Linear(d_model, n_heads * d_k)
+        self.w_ks = nn.Linear(d_model, n_heads * d_k)
+        self.w_vs = nn.Linear(d_model, n_heads * d_v)
+        
+        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_v)))
+        
+        self.fc = nn.Linear(n_heads * d_v, d_model)
+        nn.init.xavier_normal_(self.fc.weight)
+        self.dropout = nn.Dropout(p=dropout)
+        
+    def get_mask(self, attn, alibi=None, mask='full'):
+        _, bs, nx, ny = attn.shape # output, input
+        if mask == 'full':
+            mask = torch.ones(bs, nx, ny, dtype=bool, device=attn.device)
+        if mask == 'causal':
+            mask = ~torch.tril(torch.ones(nx, ny, dtype=bool, device=attn.device), diagonal=ny-nx)
+        if mask == 'doublecausal':
+            # cross attention but don't attend to stuff ahead in the other seq
+            ny = nx
+            mask = ~torch.tril(torch.ones(nx, ny, dtype=bool, device=attn.device), diagonal=ny-nx)
+            mask = torch.cat([mask, mask], dim=-1)
+
+    def forward(self, query, key, value, mask='full'):
+        q = rearrange(self.w_qs(query), 'b l (head q) -> head b l q', head=self.n_heads)
+        k = rearrange(self.w_ks(key), 'b t (head k) -> head b t k', head=self.n_heads)
+        v = rearrange(self.w_vs(value), 'b t (head v) -> head b t v', head=self.n_heads)
+        attn = torch.einsum('hblk,hbtk->hblt', [q, k]) / np.sqrt(q.shape[-1])
+        
+        
+        if mask is not None:
+            if mask.ndim==2:
+                mask = mask[None]
+            attn = attn.masked_fill(mask[None], -np.inf)
+        attn = torch.softmax(attn, dim=3)
+        output = torch.einsum('hblt,hbtv->hblv', [attn, v])
+        output = rearrange(output, 'head b l v -> b l (head v)')
+        output = self.dropout(self.fc(output))
+        
+        return output, attn
 
 # Code from https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
-
-
 class Block(nn.Module):
     """Transformer Block"""
 
@@ -54,11 +102,17 @@ class Block(nn.Module):
         super().__init__()
         self.config = config
         self.ln_1 = nn.LayerNorm(config["n_embd"])
-        self.attn = nn.MultiheadAttention(
+        # self.attn = nn.MultiheadAttention(
+        #     config["n_embd"],
+        #     config["n_head"],
+        #     dropout=config["attn_pdrop"],
+        #     batch_first=True,
+        # )
+        self.attn = MultiHeadAttention(
             config["n_embd"],
             config["n_head"],
             dropout=config["attn_pdrop"],
-            batch_first=True,
+            # batch_first=True,
         )
         self.ln_2 = nn.LayerNorm(config["n_embd"])
         self.mlp = nn.Sequential(
@@ -91,7 +145,8 @@ class Block(nn.Module):
 
         lnx, lny = self.ln_1(x), self.ln_1(y)
         
-        attn_output, attn_weights = self.attn(query=lnx, key=lny, value=lny, need_weights=True, attn_mask=mask, average_attn_weights=False)
+        # attn_output, attn_weights = self.attn(query=lnx, key=lny, value=lny, need_weights=True, attn_mask=mask, average_attn_weights=False)
+        attn_output, attn_weights = self.attn(query=lnx, key=lny, value=lny, mask=mask)
         self.attn_weights = attn_weights.detach().clone()
         # print(attn_weights.shape, self.wtf.shape)
         # x = x + self.attn(query=lnx, key=lny, value=lny, need_weights=False, attn_mask=mask)[0]
