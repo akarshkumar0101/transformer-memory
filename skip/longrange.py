@@ -9,8 +9,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange, reduce, repeat
 
-from transformer import (Block, calc_fourier_position_embeddings,
-                         fn_cross_entropy)
+from sinusoidal import calc_fourier_position_embeddings
 
 default_config = dict(
     n_vocab=128,
@@ -57,6 +56,108 @@ def get_config(premade=None, **kwargs):
     config.update(kwargs)
     return config
 
+def calc_attn_mask(d_out, d_in, mask='causal', alibi=False, dtype=None, device='cpu'):
+    """
+    Return 1, d_out, d_in shape with -inf where attn cannot happen.
+    (the 1 corresponds to the different heads)
+    
+    During cross attn it should be used as cross attn with A and cat([B, A])
+    """
+    if mask == 'full':
+        mask = torch.ones(d_out, d_in, dtype=bool, device=device)
+    if mask == 'causal':
+        mask = torch.tril(torch.ones(d_out, d_in, dtype=bool, device=device), diagonal=d_in-d_out)
+    if mask == 'doublecausal':
+        # cross attention but don't attend to stuff ahead in the other seq
+        d_in = d_out
+        mask = torch.tril(torch.ones(d_out, d_in, dtype=bool, device=device), diagonal=d_in-d_out)
+        mask = torch.cat([mask, mask], dim=-1)
+    a = torch.zeros(mask.shape, dtype=dtype, device=device).masked_fill(~mask, value=-torch.inf)
+    return a[None]
+def calc_attn_mask_with_attn(attn, mask='causal', alibi=False):
+    d_out, d_in = attn.shape[-2:]
+    return calc_attn_mask(d_out, d_in, mask=mask, alibi=alibi, dtype=attn.dtype, device=attn.device)
+
+# Code from https://ai.stackexchange.com/questions/35548/when-exactly-does-the-split-into-different-heads-in-multi-head-attention-occur
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, n_heads, d_k=None, d_v=None, dropout=0.1):
+        super().__init__()
+        self.d_model, self.n_heads = d_model, n_heads
+        if d_k is None:
+            d_k = self.d_model//self.n_heads
+            d_v = self.d_model//self.n_heads
+        
+        self.w_qs = nn.Linear(d_model, n_heads * d_k)
+        self.w_ks = nn.Linear(d_model, n_heads * d_k)
+        self.w_vs = nn.Linear(d_model, n_heads * d_v)
+        
+        nn.init.normal_(self.w_qs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+        nn.init.normal_(self.w_ks.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_k)))
+        nn.init.normal_(self.w_vs.weight, mean=0, std=np.sqrt(2.0 / (d_model + d_v)))
+        
+        self.fc = nn.Linear(n_heads * d_v, d_model)
+        nn.init.xavier_normal_(self.fc.weight)
+        self.dropout = nn.Dropout(p=dropout)
+        
+
+    def forward(self, query, key, value, mask='causal', alibi=False):
+        q = rearrange(self.w_qs(query), 'b l (head q) -> b head l q', head=self.n_heads)
+        k = rearrange(self.w_ks(key), 'b t (head k) -> b head t k', head=self.n_heads)
+        v = rearrange(self.w_vs(value), 'b t (head v) -> b head t v', head=self.n_heads)
+        attn = torch.einsum('bhlk,bhtk->bhlt', [q, k]) / np.sqrt(q.shape[-1])
+        
+        mask = calc_attn_mask_with_attn(attn, mask=mask, alibi=alibi)
+        attn = attn+mask[None]
+        
+        attn = torch.softmax(attn, dim=3)
+        output = torch.einsum('bhlt,bhtv->bhlv', [attn, v])
+        output = rearrange(output, 'b head l v -> b l (head v)')
+        output = self.dropout(self.fc(output))
+        
+        # for debugging
+        self.attn_mask = mask.detach()
+        self.attn_mat = attn.detach()
+        
+        return output, attn
+
+# Code from https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
+class Block(nn.Module):
+    """Transformer Block"""
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.ln_1 = nn.LayerNorm(config["n_embd"])
+        self.mhattn = MultiHeadAttention(
+            config["n_embd"],
+            config["n_head"],
+            dropout=config["attn_pdrop"],
+        )
+        self.ln_2 = nn.LayerNorm(config["n_embd"])
+        self.mlp = nn.Sequential(
+            nn.Linear(config["n_embd"], 4 * config["n_embd"]),
+            nn.GELU(),
+            nn.Linear(4 * config["n_embd"], config["n_embd"]),
+            nn.Dropout(config["resid_pdrop"]),
+        )
+
+    def forward(self, x, y=None, mask='causal', alibi=False):
+        """
+        x is the output sequence (queries generated from this)
+        y is the input sequence (keys+values generated from this)
+        """
+        if y is None:
+            y = x
+        lnx, lny = self.ln_1(x), self.ln_1(y)
+        attn_output, attn_mat = self.mhattn(query=lnx, key=lny, value=lny, mask=mask, alibi=alibi)
+        x = x + attn_output
+        x = x + self.mlp(self.ln_2(x))
+        
+        # for debugging
+        self.attn_mat = attn_mat.detach()
+        
+        return x
+
 
 # Code from https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
 
@@ -97,9 +198,12 @@ class LongRangeGPT(nn.Module):
         
         self.ln_f = nn.LayerNorm(config["n_embd"])
         self.lin_head = nn.Linear(config["n_embd"], config["n_vocab"], bias=False)
+        
+        self.fn_cross_entropy = nn.CrossEntropyLoss()
 
     # def forward(self, ids, long_range_input=None, calc_long_range_output=False):
     def forward(self, ids, memory_in=None, calc_memory_out=False, use_my_lrr_kv=False):
+        self.ids = ids
         # use_longterm_stack = use_my_lrr_kv or lrr_memory is not None
         
         device = ids.device
@@ -185,6 +289,8 @@ class LongRangeGPT(nn.Module):
 
 
 def loss_fn_longrange(net, ids1, ids2):
+    fn_cross_entropy = net.fn_cross_entropy
+        
     inputs1, targets1 = ids1[..., :-1], ids1[..., 1:]  # ..., context_length-1
     inputs2, targets2 = ids2[..., :-1], ids2[..., 1:]  # ..., context_length-1
 
@@ -202,6 +308,7 @@ def loss_fn_longrange(net, ids1, ids2):
 
 
 def loss_fn(net, ids):
+    fn_cross_entropy = net.fn_cross_entropy
     inputs, targets = ids[..., :-1], ids[..., 1:]  # ..., context_length-1
     logits, _ = net.forward(inputs)  # -1, context_length-1, n_vocab
     targets = targets[:, -logits.size(1) :] # -1, however many outputs we have
@@ -218,6 +325,7 @@ def loss_fn_longrange(net, batch_ids, batch_fbin):
     - losses of shape bs, n_seqs, seq_len-1
     - fbin2loss is dictionary from fbin to [loss for each seq in n_seqs]
     """
+    fn_cross_entropy = net.fn_cross_entropy
     bs, n_seqs, seq_len = batch_ids.shape
     loss_fn = nn.CrossEntropyLoss(reduction='none')
     

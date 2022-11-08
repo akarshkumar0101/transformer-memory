@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 import dataset
 import longrange
-import transformer
 import util
 
 def train_transformer(ds, net, n_batches=10, batch_size=32, seq_len=100, lr=1e-3, device='cpu', wandb=None, tqdm=None):
