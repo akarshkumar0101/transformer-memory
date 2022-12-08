@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from einops import rearrange, reduce, repeat
-
 from sinusoidal import calc_fourier_position_embeddings
 
 default_config = dict(
@@ -290,7 +289,7 @@ class LongRangeGPT(nn.Module):
 
 def loss_fn_longrange(net, ids1, ids2):
     fn_cross_entropy = net.fn_cross_entropy
-        
+    
     inputs1, targets1 = ids1[..., :-1], ids1[..., 1:]  # ..., context_length-1
     inputs2, targets2 = ids2[..., :-1], ids2[..., 1:]  # ..., context_length-1
 

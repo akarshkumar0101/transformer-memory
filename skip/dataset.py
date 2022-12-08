@@ -3,7 +3,6 @@ import parser
 
 import numpy as np
 import torch
-
 import util
 
 
