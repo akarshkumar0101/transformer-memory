@@ -100,8 +100,8 @@ def evaluate_longrange(net, ds, n_batches, batch_size,
         - loss_count: (n_seqs, seq_len-1, 11)
     """
     net.to(device).eval()
-    loss_mean = torch.zeros(n_seqs, seq_len-1, 11)
-    loss_count = torch.ones(n_seqs, seq_len-1, 11)
+    loss_mean = torch.zeros(n_seqs, seq_len-1, 11, device=device)
+    loss_count = torch.ones(n_seqs, seq_len-1, 11, device=device)
 
     pbar = dataset.get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len,
                                    min_dist, max_dist, unbind=False, device=device)
@@ -124,4 +124,4 @@ def evaluate_longrange(net, ds, n_batches, batch_size,
         if tqdm is not None:
             pbar.set_postfix(loss=loss.item())
 
-    return loss_mean, loss_count
+    return loss_mean.cpu(), loss_count.cpu()
