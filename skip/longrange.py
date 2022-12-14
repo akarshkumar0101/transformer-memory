@@ -171,7 +171,7 @@ class LongRangeGPT(nn.Module):
         if config["max_context_length"] is None:
             self.wpe = partial(calc_fourier_position_embeddings, config=self.config)
         else:
-            self.wpe = nn.Embedding(config["block_size"], config["n_embd"])
+            self.wpe = nn.Embedding(config["max_context_length"], config["n_embd"])
 
         self.drop = nn.Dropout(config["embd_pdrop"])
         
@@ -286,65 +286,41 @@ class LongRangeGPT(nn.Module):
 
         return (logits, memory_created) if calc_memory_out else (logits, None)
 
+# def loss_fn(net, ids):
+#     fn_cross_entropy = net.fn_cross_entropy
+#     inputs, targets = ids[..., :-1], ids[..., 1:]  # ..., context_length-1
+#     logits, _ = net.forward(inputs)  # -1, context_length-1, n_vocab
+#     targets = targets[:, -logits.size(1) :] # -1, however many outputs we have
+#     loss = fn_cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+#     return loss
 
-def loss_fn_longrange(net, ids1, ids2):
-    fn_cross_entropy = net.fn_cross_entropy
-    
-    inputs1, targets1 = ids1[..., :-1], ids1[..., 1:]  # ..., context_length-1
-    inputs2, targets2 = ids2[..., :-1], ids2[..., 1:]  # ..., context_length-1
-
-    logits1, memory1 = net.forward(inputs1, memory_in=None, calc_memory_out=True)
-    logits2, memory2 = net.forward(inputs2, memory_in=memory1, calc_memory_out=False)
-    # -1, context_length-1, n_vocab
-    loss1 = fn_cross_entropy(
-        logits1.reshape(-1, logits1.size(-1)), targets1.reshape(-1)
-    )
-    loss2 = fn_cross_entropy(
-        logits2.reshape(-1, logits2.size(-1)), targets2.reshape(-1)
-    )
-    loss = (loss1 + loss2) / 2.0
-    return loss, loss1, loss2
-
-
-def loss_fn(net, ids):
-    fn_cross_entropy = net.fn_cross_entropy
-    inputs, targets = ids[..., :-1], ids[..., 1:]  # ..., context_length-1
-    logits, _ = net.forward(inputs)  # -1, context_length-1, n_vocab
-    targets = targets[:, -logits.size(1) :] # -1, however many outputs we have
-    loss = fn_cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-    return loss
-
-def loss_fn_longrange(net, batch_ids, batch_fbin):
+def loss_fn_longrange(net, ids):
     """
     Computes losses using long-range memory
     - batch_ids is of shape (bs, n_seqs, seq_len)
-    - batch_fbin is of shape (bs, n_seqs, seq_len)
     
     Returns 
     - losses of shape bs, n_seqs, seq_len-1
-    - fbin2loss is dictionary from fbin to [loss for each seq in n_seqs]
     """
-    # fn_cross_entropy = net.fn_cross_entropy
-    bs, n_seqs, seq_len = batch_ids.shape
+    bs, n_seqs, seq_len = ids.shape
     loss_fn = nn.CrossEntropyLoss(reduction='none')
     
-    fbin2loss = {fbin: torch.full((n_seqs, ), torch.nan) for fbin in range(-2, 9)}
     losses = []
-    
     memory = None
-    for idx_seq, (ids_seq, fbin_seq) in enumerate(zip(batch_ids.unbind(dim=-2), batch_fbin.unbind(dim=-2))):
-        fbin_seq = fbin_seq[..., 1:]
-        inputs, targets = ids_seq[..., :-1], ids_seq[..., 1:] # ..., context_length-1
+    for ids_seq in ids.unbind(dim=-2):
+        # ids_seq: (bs, seq_len)
+        inputs, targets = ids_seq[..., :-1], ids_seq[..., 1:] # : (bs, seq_len-1)
         logits, memory_out = net.forward(inputs, memory_in=memory, calc_memory_out=net.config['use_memory'])
+        # logits: (bs, seq_len-1, vocab_size)
         memory = memory_out if memory is None else torch.cat([memory, memory_out], dim=-2)
-        
-        loss = loss_fn(logits.reshape(-1, logits.size(-1)), targets.reshape(-1)).reshape(bs, -1)
+        # memory: (bs, memory_size, seq_len-1)
+
+        loss = loss_fn(rearrange(logits, 'b s v -> (b s) v'),
+                      rearrange(targets, 'b s -> (b s)'))
+        loss = rearrange(loss, '(b s) -> b s', b=bs)
         losses.append(loss)
-        
-        for fbin in fbin_seq.unique().sort().values.tolist():
-            fbin2loss[fbin][idx_seq] = loss.flatten()[fbin_seq.flatten()==fbin].mean().item()
-    losses = torch.stack(losses, dim=-2)
-    return losses, fbin2loss
+    losses = torch.stack(losses, dim=-2) #: (bs, n_seqs, seq_len-1)
+    return losses
 
 @torch.no_grad()
 def generate_ak(

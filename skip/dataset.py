@@ -115,7 +115,8 @@ cidx_last = N-C
 
 """
 
-def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=0, max_dist=None, unbind=True, device='cpu', dtype=torch.long):
+def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=0, max_dist=None,
+                    unbind=True, device='cpu', dtype=torch.long):
     """
     ds is the dataset
     n_batches in the number of batches to loop over
@@ -127,6 +128,13 @@ def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=0, max_
     
     min_dist (inclusive), max_dist (exclusive)
     unbind decides whether or not iterator should return a tuple of n_seqs
+
+
+    returns iterator with elements:
+        if unbind:
+            ((ids_i: [bs, seq_len] for i_seq in range(n_seqs)), (fbins_i: [bs, seq_len] for i_seq in range(n_seqs))
+        else:
+            (ids: [bs, n_seqs, seq_len], fbins: [bs, n_seqs, seq_len])
     """
     if max_dist is None:
         max_dist = max([len(ids) for ids in ds.values()])
