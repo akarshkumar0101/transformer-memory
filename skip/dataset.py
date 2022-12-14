@@ -115,7 +115,7 @@ cidx_last = N-C
 
 """
 
-def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=None, max_dist=None, unbind=True, device='cpu', dtype=torch.long):
+def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=0, max_dist=None, unbind=True, device='cpu', dtype=torch.long):
     """
     ds is the dataset
     n_batches in the number of batches to loop over
@@ -128,8 +128,6 @@ def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=None, m
     min_dist (inclusive), max_dist (exclusive)
     unbind decides whether or not iterator should return a tuple of n_seqs
     """
-    if min_dist is None:
-        min_dist = 0
     if max_dist is None:
         max_dist = max([len(ids) for ids in ds.values()])
     assert min_dist<=max_dist and min_dist>=0
@@ -169,7 +167,7 @@ def get_seq_batches(ds, n_batches, batch_size, n_seqs, seq_len, min_dist=None, m
             yield batch_ids, batch_fbin
         # -2 for all characters
         # -1 for first character of unknown word
-        # 0 for first character of common words
+        # 0 for first character of most common words
         # 1 for first character of second common words
         # 2 for first character of third common words
         # ... for first character of ... common words

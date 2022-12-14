@@ -324,13 +324,12 @@ def loss_fn_longrange(net, batch_ids, batch_fbin):
     - losses of shape bs, n_seqs, seq_len-1
     - fbin2loss is dictionary from fbin to [loss for each seq in n_seqs]
     """
-    fn_cross_entropy = net.fn_cross_entropy
+    # fn_cross_entropy = net.fn_cross_entropy
     bs, n_seqs, seq_len = batch_ids.shape
     loss_fn = nn.CrossEntropyLoss(reduction='none')
     
     fbin2loss = {fbin: torch.full((n_seqs, ), torch.nan) for fbin in range(-2, 9)}
     losses = []
-    import parser
     
     memory = None
     for idx_seq, (ids_seq, fbin_seq) in enumerate(zip(batch_ids.unbind(dim=-2), batch_fbin.unbind(dim=-2))):

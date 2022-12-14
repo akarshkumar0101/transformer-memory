@@ -1,9 +1,7 @@
-import torch
-from torch import nn
-
-
 import dataset
 import longrange
+import torch
+from torch import nn
 
 
 def evaluate_transformer(ds, net, n_batches=10, batch_size=32, n_seqs=4, seq_len=100, device='cpu', wandb=None, tqdm=None):
@@ -53,6 +51,7 @@ def evaluate_longrange(ds, net, n_batches=10, batch_size=32, n_seqs=4, seq_len=1
     with torch.no_grad():
         for batch_ids, batch_fbin in pbar:
             losses, fbin2loss = longrange.loss_fn_longrange(net, batch_ids, batch_fbin)
+            print(losses.shape, fbin2loss.shape)
             fbin2loss_all.append(fbin2loss)
             losses_all.append(losses.mean(dim=0).detach().cpu())
         losses_all = torch.stack(losses_all)
