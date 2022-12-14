@@ -136,12 +136,12 @@ def main(args):
 
     if args.track:
         for i_seq in range(len(loss_mean)):
-            fig = evaluate.viz_losses(loss_mean[:, i_seq], loss_count[:, i_seq])
+            fig = evaluate.viz_losses(loss_mean[i_seq], loss_count[i_seq])
             wandb.log({f'viz losses seq {i_seq}': fig})
 
         net.eval().cpu()
-        torch.save(net, f'../results/{run.name}/model.pt')
-        torch.save((loss_mean, loss_count), f'../results/{run.name}/losses.pt')
+        torch.save(net, f'../results/{run.name}_model.pt')
+        torch.save((loss_mean, loss_count), f'../results/{run.name}_losses.pt')
 
         run.finish()
         plt.close('all')
