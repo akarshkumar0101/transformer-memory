@@ -143,9 +143,9 @@ def main(args):
         net.eval().cpu()
 
         # make the log directory recursively
-        os.makedirs(f'../results/{run.name}', exist_ok=True)
-        torch.save(net, f'../results/{run.name}/model.pt')
-        torch.save((loss_mean, loss_count), f'../results/{run.name}/losses.pt')
+        os.makedirs(f'./results/{run.name}', exist_ok=True)
+        torch.save(net, f'./results/{run.name}/model.pt')
+        torch.save((loss_mean, loss_count), f'./results/{run.name}/losses.pt')
 
         run.finish()
         plt.close('all')
@@ -153,8 +153,8 @@ def main(args):
 parser = argparse.ArgumentParser(description='Train a model.')
 
 parser.add_argument('--model', type=str, default='longrange')
-parser.add_argument('--n_batches_train', type=int, default=500)
-parser.add_argument('--n_batches_test', type=int, default=500)
+parser.add_argument('--n_batches_train', type=int, default=5000)
+parser.add_argument('--n_batches_test', type=int, default=5000)
 parser.add_argument('--batch_size', type=int, default=16)
 parser.add_argument('--seq_len', type=int, default=8)
 parser.add_argument('--min_dist', type=int, default=0)
@@ -176,8 +176,18 @@ if __name__ == '__main__':
 # Test
 
 python train.py --model transformer --n_batches_train 0100 --n_batches_test 0100 --batch_size 64 --seq_len 8 --seed 0 --lr 1e-3 --device cuda:0 --track --name testing
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 1e-3 --device cuda:0 --track --name testing
 
 # Learning Rate Sweep
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 3e-3 --device cuda:0 --track --name lr_3e-3 &
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 1e-3 --device cuda:0 --track --name lr_1e-3 &
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 6e-4 --device cuda:1 --track --name lr_6e-4 &
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:1 --track --name lr_3e-4 &
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 1e-4 --device cuda:2 --track --name lr_1e-4 &
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 6e-5 --device cuda:2 --track --name lr_6e-5 &
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 3e-5 --device cuda:3 --track --name lr_3e-5 &
+python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 1e-5 --device cuda:3 --track --name lr_1e-5 &
+wait
 
 # Transformer Model Size Sweep
 
