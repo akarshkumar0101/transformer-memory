@@ -175,7 +175,7 @@ if __name__ == '__main__':
 """
 # Test
 
-python train.py --model transformer --n_batches_train 0100 --n_batches_test 0100 --batch_size 64 --seq_len 8 --seed 0 --lr 1e-3 --device 0 --track --name testing
+python train.py --model transformer --n_batches_train 0100 --n_batches_test 0100 --batch_size 64 --seq_len 8 --seed 0 --lr 1e-3 --device cuda:0 --track --name testing
 
 # Learning Rate Sweep
 
