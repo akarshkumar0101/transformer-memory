@@ -190,17 +190,38 @@ python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 1e
 wait
 
 # Transformer Model Size Sweep
-
-python train.py --model  transformer_small --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:0 --track --name size__small &
-python train.py --model transformer_medium --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:1 --track --name size_medium &
-python train.py --model  transformer_large --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:2 --track --name size__large &
-python train.py --model transformer_xlarge --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:3 --track --name size_xlarge &
-
-
+python train.py --model  transformer_small --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:0 --track --name transformer__small &
+python train.py --model transformer_medium --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:1 --track --name transformer_medium &
+python train.py --model  transformer_large --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:2 --track --name transformer__large &
+python train.py --model transformer_xlarge --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:3 --track --name transformer_xlarge &
+wait
 
 # Longrange Model Size Sweep
+python train.py --model  longrange_small --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:0 --track --name longrange__small &
+python train.py --model longrange_medium --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:1 --track --name longrange_medium &
+python train.py --model  longrange_large --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:2 --track --name longrange__large &
+python train.py --model longrange_xlarge --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:3 --track --name longrange_xlarge &
+wait
 
-# Seq Length Sweep
+# Transformer Seq Length Sweep
+python train.py --model transformer --batch_size 64 --seq_len 002 --seed 0 --lr 3e-4 --device cuda:0 --track --name transformer_002 &
+python train.py --model transformer --batch_size 64 --seq_len 004 --seed 0 --lr 3e-4 --device cuda:1 --track --name transformer_004 &
+python train.py --model transformer --batch_size 64 --seq_len 008 --seed 0 --lr 3e-4 --device cuda:2 --track --name transformer_008 &
+python train.py --model transformer --batch_size 64 --seq_len 016 --seed 0 --lr 3e-4 --device cuda:3 --track --name transformer_016 &
+python train.py --model transformer --batch_size 64 --seq_len 032 --seed 0 --lr 3e-4 --device cuda:4 --track --name transformer_032 &
+python train.py --model transformer --batch_size 64 --seq_len 064 --seed 0 --lr 3e-4 --device cuda:0 --track --name transformer_064 &
+wait
+
+# Longrange Seq Length Sweep
+python train.py --model longrange --batch_size 64 --seq_len 002 --seed 0 --lr 3e-4 --device cuda:0 --track --name longrange_002 &
+python train.py --model longrange --batch_size 64 --seq_len 004 --seed 0 --lr 3e-4 --device cuda:1 --track --name longrange_004 &
+python train.py --model longrange --batch_size 64 --seq_len 008 --seed 0 --lr 3e-4 --device cuda:2 --track --name longrange_008 &
+python train.py --model longrange --batch_size 64 --seq_len 016 --seed 0 --lr 3e-4 --device cuda:3 --track --name longrange_016 &
+python train.py --model longrange --batch_size 64 --seq_len 032 --seed 0 --lr 3e-4 --device cuda:4 --track --name longrange_032 &
+python train.py --model longrange --batch_size 64 --seq_len 064 --seed 0 --lr 3e-4 --device cuda:0 --track --name longrange_064 &
+wait
+
+
 
 python train.py --device cuda:0 --model transformer --seq_len 64 --seed 0
 

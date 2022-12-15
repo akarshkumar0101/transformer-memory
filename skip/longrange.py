@@ -51,7 +51,7 @@ configs = {
 
     "transformer": dict(n_layer=6, n_head=6, n_embd=384),
     "perceiver": dict(n_layer=6, n_head=6, n_embd=384, n_latent_tokens=64),
-    "longrange1": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False),
+    "longrange": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False),
     "longrange2": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False, memory_cross_attn_only=False),
     # "longrange3": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=True),
 }
