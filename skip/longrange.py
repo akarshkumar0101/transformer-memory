@@ -20,6 +20,10 @@ default_config = dict(
     n_head=3,
     n_embd=48,
     n_latent_tokens=None,
+
+    use_memory=False,
+    share_cr=False,
+    memory_cross_attn_only=True,
 )
 configs = {
     "gpt1": dict(n_layer=12, n_head=12, n_embd=768),  # 117M params
@@ -35,23 +39,27 @@ configs = {
 }
 
 configs = {
+    "transformer_small": dict(n_layer=3, n_head=3, n_embd=96),
+    "transformer_medium": dict(n_layer=6, n_head=6, n_embd=384),
+    "transformer_large": dict(n_layer=9, n_head=9, n_embd=720),
+    "transformer_xlarge": dict(n_layer=12, n_head=12, n_embd=1152),
+
+    "longrange_small": dict(n_layer=3, n_head=3, n_embd=96, use_memory=True, share_cr=False),
+    "longrange_medium": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False),
+    "longrange_large": dict(n_layer=9, n_head=9, n_embd=720, use_memory=True, share_cr=False),
+    "longrange_xlarge": dict(n_layer=12, n_head=12, n_embd=1152, use_memory=True, share_cr=False),
+
     "transformer": dict(n_layer=6, n_head=6, n_embd=384),
     "perceiver": dict(n_layer=6, n_head=6, n_embd=384, n_latent_tokens=64),
     "longrange1": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False),
-    "longrange2": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=True),
-    "longrange3": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False, memory_cross_attn_only=False),
+    "longrange2": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=False, memory_cross_attn_only=False),
+    # "longrange3": dict(n_layer=6, n_head=6, n_embd=384, use_memory=True, share_cr=True),
 }
 
 def get_config(premade=None, **kwargs):
     config = default_config.copy()
     if premade is not None:
         config.update(configs[premade])
-    if 'use_memory' not in config:
-        config['use_memory'] = False
-    if 'share_cr' not in config:
-        config['share_cr'] = False
-    if 'memory_cross_attn_only' not in config:
-        config['memory_cross_attn_only'] = True
     config.update(kwargs)
     return config
 
@@ -191,14 +199,12 @@ class LongRangeGPT(nn.Module):
                 [Block(config) for idx_layer in range(nb_3*2)]
             )
 
-            # share_memory_creator_retriever
+        # share_memory_creator_retriever
         self.share_cr = config['share_cr']
         self.memory_cross_attn_only = config['memory_cross_attn_only']
         
         self.ln_f = nn.LayerNorm(config["n_embd"])
         self.lin_head = nn.Linear(config["n_embd"], config["n_vocab"], bias=False)
-        
-        self.fn_cross_entropy = nn.CrossEntropyLoss()
 
     # def forward(self, ids, long_range_input=None, calc_long_range_output=False):
     def forward(self, ids, memory_in=None, calc_memory_out=False, use_my_lrr_kv=False):

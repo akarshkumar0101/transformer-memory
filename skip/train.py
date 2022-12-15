@@ -1,5 +1,6 @@
 
 import argparse
+import os
 import parser
 from functools import partial
 
@@ -112,7 +113,7 @@ def main(args):
     ds_train, ds_test = dataset.load_dataset(tqdm=tqdm)
     print('Done!')
     np.random.seed(args.seed); torch.manual_seed(args.seed)
-    config_net = longrange.get_config(args.model)
+    config_net = longrange.get_config(args.model, max_context_length=args.seq_len)
     net = longrange.LongRangeGPT(**config_net)
     print(f'Model: {args.model}')
     print(f'Model config: {config_net}')
@@ -120,7 +121,6 @@ def main(args):
     
     config = vars(args)
     config['config_net'] = config_net
-    
     
     if args.track:
         run = wandb.init(config=config, name=args.name, save_code=True)
@@ -137,21 +137,20 @@ def main(args):
     if args.track:
         for i_seq in range(len(loss_mean)):
             fig = evaluate.viz_losses(loss_mean[i_seq], loss_count[i_seq])
-            wandb.log({f'viz losses seq {i_seq}': fig})
+            plt.suptitle(f'Losses for sequence {i_seq}')
+            wandb.log({f'viz loss': fig})
 
         net.eval().cpu()
-        torch.save(net, f'../results/{run.name}_model.pt')
-        torch.save((loss_mean, loss_count), f'../results/{run.name}_losses.pt')
+
+        # make the log directory recursively
+        os.makedirs(f'../results/{run.name}', exist_ok=True)
+        torch.save(net, f'../results/{run.name}/model.pt')
+        torch.save((loss_mean, loss_count), f'../results/{run.name}/losses.pt')
 
         run.finish()
         plt.close('all')
 
 parser = argparse.ArgumentParser(description='Train a model.')
-parser.add_argument('--track', action=argparse.BooleanOptionalAction, default=False)
-parser.add_argument('--name', type=str, default=None)
-
-parser.add_argument('--seed', type=int, default=0)
-parser.add_argument('--device', type=str, default='cpu')
 
 parser.add_argument('--model', type=str, default='longrange')
 parser.add_argument('--n_batches_train', type=int, default=500)
@@ -164,11 +163,28 @@ parser.add_argument('--n_latent_tokens', type=int, default=None)
 
 parser.add_argument('--lr', type=float, default=1e-3)
 
+parser.add_argument('--seed', type=int, default=0)
+parser.add_argument('--device', type=str, default='cpu')
+parser.add_argument('--track', action=argparse.BooleanOptionalAction, default=False)
+parser.add_argument('--name', type=str, default=None)
+
 if __name__ == '__main__':
     args = parser.parse_args()
     main(args)
 
 """
+# Test
+
+python train.py --model transformer --n_batches_train 0100 --n_batches_test 0100 --batch_size 64 --seq_len 8 --seed 0 --lr 1e-3 --device 0 --track --name testing
+
+# Learning Rate Sweep
+
+# Transformer Model Size Sweep
+
+# Longrange Model Size Sweep
+
+# Seq Length Sweep
+
 python train.py --device cuda:0 --model transformer --seq_len 64 --seed 0
 
 python train.py --device cuda:1 --model perceiver --seq_len 128 --seed 0
@@ -176,7 +192,6 @@ python train.py --device cuda:2 --model perceiver --seq_len 256 --seed 0
 python train.py --device cuda:0 --model perceiver --seq_len 512 --seed 0
 
 python train.py --device cuda:3 --model longrange1 --seq_len 64 --batch_size 64 --seed 0
-
 
 python main.py --device cuda:0 --model transformer --seq_len 002 --track --name transformer-002
 python main.py --device cuda:0 --model transformer --seq_len 004 --track --name transformer-004
