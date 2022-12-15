@@ -67,7 +67,7 @@ def viz_losses(loss_mean, loss_count):
     loss_mean: (seq_len, 10)
     loss_count: (seq_len, 10)
     """
-    plt.figure(figsize=(10, 7.5))
+    plt.figure(figsize=(20, 15))
     plt.subplot(321); plt.title('PPL mean'); plt.ylabel('fbin'); plt.xlabel('seq_len')
     plt.imshow(loss_mean.exp().detach().cpu().numpy().T)
     plt.colorbar()
@@ -101,6 +101,7 @@ def viz_losses(loss_mean, loss_count):
     plt.plot(ppl_percent_change.detach().cpu().numpy()[:, 1], label='unknown word', color='k')
     plt.gca().set_ylim(ylim)
     plt.legend()
+    plt.tight_layout()
     return plt.gcf()
 
 
