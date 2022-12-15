@@ -155,7 +155,7 @@ parser = argparse.ArgumentParser(description='Train a model.')
 parser.add_argument('--model', type=str, default='longrange')
 parser.add_argument('--n_batches_train', type=int, default=5000)
 parser.add_argument('--n_batches_test', type=int, default=5000)
-parser.add_argument('--batch_size', type=int, default=16)
+parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--seq_len', type=int, default=8)
 parser.add_argument('--min_dist', type=int, default=0)
 parser.add_argument('--max_dist', type=int, default=1)
@@ -190,6 +190,13 @@ python train.py --model transformer --batch_size 64 --seq_len 8 --seed 0 --lr 1e
 wait
 
 # Transformer Model Size Sweep
+
+python train.py --model  transformer_small --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:0 --track --name size__small &
+python train.py --model transformer_medium --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:1 --track --name size_medium &
+python train.py --model  transformer_large --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:2 --track --name size__large &
+python train.py --model transformer_xlarge --batch_size 64 --seq_len 8 --seed 0 --lr 3e-4 --device cuda:3 --track --name size_xlarge &
+
+
 
 # Longrange Model Size Sweep
 
