@@ -90,11 +90,11 @@ class GPT(nn.Module):
         logits = self.lm_head(x)
         return logits
 
-    def loss_fn(self, tok):
-        b, t = tok.shape
-        x, y = tok[:, :-1], tok[:, 1:]
-        logits = self(x)
-        return torch.nn.functional.cross_entropy(logits.reshape(-1, self.vocab_size), y.reshape(-1), reduction="none").reshape(b, -1)
+    # def loss_fn(self, tok):
+    #     b, t = tok.shape
+    #     x, y = tok[:, :-1], tok[:, 1:]
+    #     logits = self(x)
+    #     return torch.nn.functional.cross_entropy(logits.reshape(-1, self.vocab_size), y.reshape(-1), reduction="none").reshape(b, -1)
 
     # def forward(self, tok, x_mems_in=None, get_mem_out=False):
     #     x_mems_in = [None] * len(self.blocks) if x_mems_in is None else x_mems_in
@@ -196,9 +196,3 @@ class MyRNN(nn.RNN):
         x, h_n = super().forward(x, h_0)
         logits = self.lm_head(x)
         return logits
-
-    def loss_fn(self, tok):
-        b, t = tok.shape
-        x, y = tok[:, :-1], tok[:, 1:]
-        logits = self(x)
-        return torch.nn.functional.cross_entropy(logits.reshape(-1, self.vocab_size), y.reshape(-1), reduction="none").reshape(b, -1)
