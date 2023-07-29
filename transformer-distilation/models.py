@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import numpy as np
-from einops import rearrange
+from einops import rearrange, repeat
 
 
 class MLP(nn.Module):
@@ -28,12 +28,12 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(n_embd)
         self.mlp = MLP(n_embd=n_embd, dropout=dropout, bias=bias)
 
-    def attn_forward(self, x, mask=None):
+    def attn_forward(self, x, mask):
         self.mask = mask
         x, self.attn_weights = self.attn(x, x, x, attn_mask=~mask, need_weights=True, average_attn_weights=False)
         return x
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask):
         x = x + self.attn_forward(self.ln_1(x), mask=mask)
         x = x + self.mlp(self.ln_2(x))
         return x
@@ -151,7 +151,7 @@ class GPT(nn.Module):
 #         return torch.nn.functional.cross_entropy(logits.reshape(-1, self.encoder.vocab_size), y.reshape(-1), reduction="none").reshape(b, -1)
 
 
-class EfficientCompressionGPT(GPT):
+class CompressionGPT(GPT):
     def __init__(self, vocab_size, block_size, n_embd, n_layer, n_head, dropout=0.0, bias=True):
         super().__init__(vocab_size, block_size, n_embd, n_layer, n_head, dropout, bias)
         self.wpe_enc = nn.Embedding(block_size, n_embd)
@@ -159,17 +159,17 @@ class EfficientCompressionGPT(GPT):
     def forward(self, tok):
         b, t = tok.shape
         assert t <= self.block_size
-        idxs_dec = torch.randint(0, self.block_size, size=(b,), device=tok.device)
+        self.idxs_dec = torch.randint(0, self.block_size, size=(b,), device=tok.device)
         pos = torch.arange(0, t, dtype=torch.long, device=tok.device)  # shape (t)
-        attn_mask = self.create_compression_attn_mask(tok, idxs_dec)
-        batch_mask = self.create_compression_batch_mask(pos, idxs_dec)
+        self.mask = self.create_compression_attn_mask(tok, self.idxs_dec)
+        self.batch_mask = self.create_compression_batch_mask(pos, self.idxs_dec)
 
-        x = self.drop(self.wte(tok) + torch.where(batch_mask, self.wpe_enc(pos), self.wpe(pos)))
+        x = self.drop(self.wte(tok) + torch.where(self.batch_mask[:, :, None], self.wpe_enc(pos), self.wpe(pos)))
         for block in self.blocks:
-            x = block(x, mask=self.mask)
+            x = block(x, mask=repeat(self.mask, "b t1 t2 -> (b h) t1 t2", h=self.n_head))
         x = self.ln_f(x)
         logits = self.lm_head(x)
-        logits = torch.where(batch_mask, torch.nan, logits)
+        logits = torch.where(self.batch_mask[:, :, None], torch.nan, logits)
         return logits
 
     def create_compression_attn_mask(self, tok, idxs_dec):
