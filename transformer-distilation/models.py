@@ -79,26 +79,37 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, tok, x_mems_in=None, get_mem_out=False):
-        x_mems_in = [None] * len(self.blocks) if x_mems_in is None else x_mems_in
-        x_mems_out = []
+    def forward(self, tok):
         b, t = tok.shape
         assert t <= self.block_size
-
         pos = torch.arange(0, t, dtype=torch.long, device=tok.device)  # shape (t)
         x = self.drop(self.wte(tok) + self.wpe(pos))
-        for block, x_mem_in in zip(self.blocks, x_mems_in):
-            x_mems_out.append(x)
-            x = block(x, x_mem_in, mask=self.mask)
+        for block in self.blocks:
+            x = block(x, mask=self.mask[:t, :t])
         x = self.ln_f(x)
         logits = self.lm_head(x)
-        return (logits, x_mems_out) if get_mem_out else logits
+        return logits
 
     def loss_fn(self, tok):
         b, t = tok.shape
         x, y = tok[:, :-1], tok[:, 1:]
         logits = self(x)
         return torch.nn.functional.cross_entropy(logits.reshape(-1, self.vocab_size), y.reshape(-1), reduction="none").reshape(b, -1)
+
+    # def forward(self, tok, x_mems_in=None, get_mem_out=False):
+    #     x_mems_in = [None] * len(self.blocks) if x_mems_in is None else x_mems_in
+    #     x_mems_out = []
+    #     b, t = tok.shape
+    #     assert t <= self.block_size
+
+    #     pos = torch.arange(0, t, dtype=torch.long, device=tok.device)  # shape (t)
+    #     x = self.drop(self.wte(tok) + self.wpe(pos))
+    #     for block, x_mem_in in zip(self.blocks, x_mems_in):
+    #         x_mems_out.append(x)
+    #         x = block(x, x_mem_in, mask=self.mask)
+    #     x = self.ln_f(x)
+    #     logits = self.lm_head(x)
+    #     return (logits, x_mems_out) if get_mem_out else logits
 
 
 # class CompressionGPT(GPT):
@@ -146,21 +157,30 @@ class EfficientCompressionGPT(GPT):
         self.wpe_enc = nn.Embedding(block_size, n_embd)
 
     def forward(self, tok):
-        bs, t = tok.shape
-        idxs_dec = torch.randint(0, self.block_size, size=(bs,), device=tok.device)
+        b, t = tok.shape
+        assert t <= self.block_size
+        idxs_dec = torch.randint(0, self.block_size, size=(b,), device=tok.device)
+        pos = torch.arange(0, t, dtype=torch.long, device=tok.device)  # shape (t)
+        attn_mask = self.create_compression_attn_mask(tok, idxs_dec)
+        batch_mask = self.create_compression_batch_mask(pos, idxs_dec)
 
-        attn_mask = self.create_compression_attn_mask(bs, t, idxs_dec)
-        batch_mask = self.create_compression_batch_mask(bs, t, idxs_dec)
+        x = self.drop(self.wte(tok) + torch.where(batch_mask, self.wpe_enc(pos), self.wpe(pos)))
+        for block in self.blocks:
+            x = block(x, mask=self.mask)
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        logits = torch.where(batch_mask, torch.nan, logits)
+        return logits
 
-    def create_compression_attn_mask(self, batch_size, block_size, idxs_dec):
-        mask = torch.tril(torch.ones(batch_size, block_size, block_size, dtype=torch.bool, device=idxs_dec.device))
+    def create_compression_attn_mask(self, tok, idxs_dec):
+        b, t = tok.shape
+        mask = torch.tril(torch.ones(b, t, t, dtype=torch.bool, device=idxs_dec.device))
         for i, i_dec in enumerate(idxs_dec):
             mask[i, i_dec:, :i_dec] = False
             mask[i, i_dec:, np.clip(i_dec - 1, 0, None)] = True
         return mask  # (b, t, t)
 
-    def create_compression_batch_mask(self, batch_size, block_size, idxs_dec):
-        pos = torch.arange(0, block_size, dtype=torch.long, device=idxs_dec.device)
+    def create_compression_batch_mask(self, pos, idxs_dec):
         return rearrange(pos, "t -> 1 t") < rearrange(idxs_dec, "b -> b 1")  # (b, t)
 
 
