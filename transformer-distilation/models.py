@@ -156,7 +156,7 @@ class CompressionGPT(GPT):
         super().__init__(vocab_size, block_size, n_embd, n_layer, n_head, dropout, bias)
         self.wpe_enc = nn.Embedding(block_size, n_embd)
 
-    def forward(self, tok):
+    def forward(self, tok, mode="train"):
         b, t = tok.shape
         assert t <= self.block_size
         self.idxs_dec = torch.randint(0, self.block_size, size=(b,), device=tok.device)
@@ -177,7 +177,7 @@ class CompressionGPT(GPT):
         mask = torch.tril(torch.ones(b, t, t, dtype=torch.bool, device=idxs_dec.device))
         for i, i_dec in enumerate(idxs_dec):
             mask[i, i_dec:, :i_dec] = False
-            mask[i, i_dec:, np.clip(i_dec - 1, 0, None)] = True
+            mask[i, i_dec:, torch.clamp(i_dec - 1, 0, None)] = True
         return mask  # (b, t, t)
 
     def create_compression_batch_mask(self, pos, idxs_dec):
