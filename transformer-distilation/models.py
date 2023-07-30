@@ -181,6 +181,7 @@ class CompressionGPT(GPT):
         super().__init__(vocab_size, block_size, n_embd, n_layer, n_head, dropout, bias)
         self.wpe_enc = nn.Embedding(block_size, n_embd)
         self.mode = mode
+        self.apply(self._init_weights)
 
     def forward(self, tok, mode=None):
         if mode is None:
@@ -201,9 +202,14 @@ class CompressionGPT(GPT):
         self.mask = self.create_compression_attn_mask(tok, self.idxs_dec, mode)
         self.batch_mask = self.create_compression_batch_mask(pos, self.idxs_dec)
 
+        # problem is either in masking position encodings or masking attention because removing both: works
+        # position encoding seems problematic
+
         x = self.drop(self.wte(tok) + torch.where(self.batch_mask[:, :, None], self.wpe_enc(pos), self.wpe(pos)))
+        # x = self.drop(self.wte(tok) + self.wpe(pos))
         for block in self.blocks:
             x = block(x, mask=repeat(self.mask, "b t1 t2 -> (b h) t1 t2", h=self.n_head))
+            # x = block(x, mask=self.mask[0])
         x = self.ln_f(x)
         logits = self.lm_head(x)
         logits = torch.where(self.batch_mask[:, :, None], torch.nan, logits)

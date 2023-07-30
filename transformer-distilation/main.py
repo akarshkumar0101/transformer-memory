@@ -1,15 +1,16 @@
 import argparse
+import os
 from distutils.util import strtobool
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import wandb
 from einops import rearrange, repeat
 from torch import nn
 from tqdm.auto import tqdm
 
 import models
+import wandb
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--track", type=lambda x: bool(strtobool(x)), default=False)
@@ -36,6 +37,8 @@ parser.add_argument("--mode", type=str, default="random")
 parser.add_argument("--lr", type=float, default=1e-4)
 parser.add_argument("--batch-size", type=int, default=16)
 parser.add_argument("--dropout", type=float, default=0.0)
+
+parser.add_argument("--save-model", type=str, default=None)
 
 
 def parse_args(*args, **kwargs):
@@ -121,6 +124,10 @@ def main(args):
             # plt.close("all")
         if viz_fast:
             pbar.set_postfix(ppl=data["ppl"], ppl_init=data["ppl_init"], ppl_half=data["ppl_half"], ppl_final=data["ppl_final"])
+
+    if args.save_model:
+        os.makedirs(os.path.dirname(args.save_model), exist_ok=True)
+        torch.save(net.state_dict(), args.save_model)
 
 
 if __name__ == "__main__":
