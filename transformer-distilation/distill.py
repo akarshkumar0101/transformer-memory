@@ -1,13 +1,16 @@
+import argparse
+import os
+from distutils.util import strtobool
+
+import numpy as np
 import torch
+import wandb
 from einops import rearrange
 from torch import nn
 from tqdm.auto import tqdm
 
-import train
 import models
-
-import argparse
-from distutils.util import strtobool
+import train
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--track", type=lambda x: bool(strtobool(x)), default=False)
@@ -46,10 +49,11 @@ def parse_args(*args, **kwargs):
 
 
 def main(args):
-    teacher_gpt = models.GPT(33, 32, 768, 4, 12)
-    teacher_gpt.load_state_dict(torch.load("models/gpt.pt"))
-    teacher_gpt = teacher_gpt.eval()
-
+    if args.track:
+        wandb.init(entity=args.entity, project=args.project, name=args.name, config=args, save_code=True)
+    # teacher_gpt = models.GPT(33, 32, 768, 4, 12)
+    # teacher_gpt.load_state_dict(torch.load("models/gpt.pt"))
+    # teacher_gpt = teacher_gpt.eval()
     teacher_comp = models.CompressionGPT(33, 32, 768, 4, 12, mode="random-causal")
     state_dict = torch.load("models/random-causal.pt")
     state_dict["mask"] = teacher_comp.mask
@@ -60,14 +64,14 @@ def main(args):
     teacher = teacher.to(args.device)
 
     # net = models.MyOneStepRecurrentNet(33, 768, 4 + 1)
-    net = models.MyOneStepRecurrentTransformer(33, 768, 6, 12)
+    net = models.MyOneStepRecurrentTransformer(33, 768, 8, 12)
     net = net.to(args.device)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
 
-    data = []
-    for i_iter in tqdm(range(10000)):
-        bs = 128 if i_iter % 200 == 0 else 16
-        tok = train.generate_batch(33, 33, bs, device=args.device)
+    pbar = tqdm(range(args.n_iters))
+    for i_iter in pbar:
+        # -------------------------------------- TRAINING -------------------------------------- #
+        tok = train.generate_batch(33, 33, args.batch_size, device=args.device)
         x, y = tok[:, :-1], tok[:, 1:]
 
         with torch.no_grad():
@@ -84,14 +88,26 @@ def main(args):
         logits, mem2hat = net(tok2, mem1)
         loss1 = nn.functional.cross_entropy(logits, tok3, reduction="none")
         loss2 = (mem2hat - mem2).pow(2)
-        loss = 1.0 * loss1.mean() + 20 * loss2.mean()
+        loss = 1.0 * loss1.mean() + 30 * loss2.mean()
         opt.zero_grad()
         loss.backward()
         opt.step()
 
-        data.append((loss1.mean().exp().item(), loss2.mean().item()))
-        if i_iter % 200 == 0:
-            print(f"i: {i_iter: 8d} ppl: {loss1.mean().exp().item():8.3f}, mse: {loss2.mean().item():8.3f}")
+        # -------------------------------------- LOGGING -------------------------------------- #
+        viz_slow = i_iter % np.clip(args.n_iters // 10, 1, None) == 0
+        viz_midd = i_iter % np.clip(args.n_iters // 100, 1, None) == 0 or viz_slow
+        viz_fast = i_iter % np.clip(args.n_iters // 1000, 1, None) == 0 or viz_midd
+        data = {}
+        if viz_fast:
+            data["ppl"] = loss1.mean().exp().item()
+            data["mse"] = loss2.mean().item()
+
+        if viz_fast and args.track:
+            wandb.log(data, step=i_iter)
+
+        if args.save_model and viz_slow:
+            os.makedirs(os.path.dirname(args.save_model), exist_ok=True)
+            torch.save(net.state_dict(), args.save_model)
 
 
 if __name__ == "__main__":
