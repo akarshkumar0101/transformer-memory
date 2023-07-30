@@ -23,7 +23,7 @@ parser.add_argument("--name", type=str, default=None)
 parser.add_argument("--device", type=str, default="cpu")
 parser.add_argument("--seed", type=int, default=0)
 
-parser.add_argument("--n-iters", type=lambda x: int(float(x)), default=int(1000))
+parser.add_argument("--n-iters", type=lambda x: int(float(x)), default=int(200000))
 
 parser.add_argument("--vocab-size", type=int, default=33)
 parser.add_argument("--block-size", type=int, default=32)
