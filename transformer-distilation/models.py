@@ -191,9 +191,9 @@ class CompressionGPT(GPT):
         if mode.startswith("random"):
             self.idxs_dec = torch.randint(0, t, size=(b,), device=tok.device)
         elif mode.startswith("encode"):
-            self.idxs_dec = torch.zeros(t - 1, dtype=torch.long, device=tok.device)
+            self.idxs_dec = torch.full((b,), fill_value=t - 1, dtype=torch.long, device=tok.device)
         elif mode.startswith("decode"):
-            self.idxs_dec = torch.zeros(b, dtype=torch.long, device=tok.device)
+            self.idxs_dec = torch.full((b,), fill_value=0, dtype=torch.long, device=tok.device)
         elif mode.startswith("half"):
             self.idxs_dec = torch.full((b,), fill_value=t // 2, dtype=torch.long, device=tok.device)
         else:
@@ -207,12 +207,17 @@ class CompressionGPT(GPT):
 
         x = self.drop(self.wte(tok) + torch.where(self.batch_mask[:, :, None], self.wpe_enc(pos), self.wpe(pos)))
         # x = self.drop(self.wte(tok) + self.wpe(pos))
+        activations = []
         for block in self.blocks:
+            activations.append(x)
             x = block(x, mask=repeat(self.mask, "b t1 t2 -> (b h) t1 t2", h=self.n_head))
             # x = block(x, mask=self.mask[0])
+        activations.append(x)
         x = self.ln_f(x)
         logits = self.lm_head(x)
         logits = torch.where(self.batch_mask[:, :, None], torch.nan, logits)
+        if mode.startswith("encode"):
+            return torch.stack(activations, dim=1)
         return logits
 
     def create_compression_attn_mask(self, tok, idxs_dec, mode):
@@ -236,8 +241,92 @@ class MyRNN(nn.RNN):
         self.embd = nn.Embedding(vocab_size, self.hidden_size)
         self.lm_head = nn.Linear(self.hidden_size, vocab_size)
 
-    def forward(self, input, h_0=None):
+    def forward(self, input, h_0=None, return_hidden_states=False):
         x = self.embd(input)
         x, h_n = super().forward(x, h_0)
         logits = self.lm_head(x)
+        if return_hidden_states:
+            return logits, h_n
         return logits
+
+
+
+
+class OneStepMLP(nn.Module):
+    def __init__(self, n_embd, dropout=0.0, bias=True):
+        super().__init__()
+        self.seq = nn.Sequential(
+            nn.Linear(2*n_embd, 2 * n_embd, bias=bias),
+            nn.GELU(),
+            nn.Linear(2*n_embd, 2 * n_embd, bias=bias),
+            nn.GELU(),
+        )
+
+    def forward(self, x):
+        x = self.seq(x)
+        return x
+
+class OneStepBlock(nn.Module):
+    def __init__(self, n_embd, dropout=0.0, bias=True):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(2*n_embd)
+        self.mlp1 = OneStepMLP(n_embd, dropout=dropout, bias=bias)
+        self.ln_2 = nn.LayerNorm(2*n_embd)
+        self.mlp2 = OneStepMLP(n_embd, dropout=dropout, bias=bias)
+
+    def forward(self, x, y):
+        x = torch.cat([x, y], dim=-1)
+        x = x + self.mlp1(self.ln_1(x))
+        x = x + self.mlp2(self.ln_2(x))
+        x, y = x.chunk(2, dim=-1)
+        return x, y
+
+class MyOneStepRecurrentNet(nn.Module):
+    def __init__(self, vocab_size, n_embd, n_layer):
+        super().__init__()
+        self.wte = nn.Embedding(vocab_size, n_embd)
+        self.blocks = nn.ModuleList([OneStepBlock(n_embd) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+
+    def forward(self, tok, mem=None):
+        # tok: (bs )
+        # mem: (bs, n_layer, d)
+        mem_outs = []
+        x = self.wte(tok)  # (bs, d)
+        for block, memi in zip(self.blocks, rearrange(mem, 'b l d -> l b d')):
+            x, memouti = block(x, memi)
+            mem_outs.append(memouti)
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        return logits, torch.stack(mem_outs, dim=1)
+
+
+class MyOneStepRecurrentTransformer(nn.Module):
+    def __init__(self, vocab_size, n_embd, n_layer, n_head):
+        super().__init__()
+        self.wte = nn.Embedding(vocab_size, n_embd)
+        self.blocks = nn.ModuleList([Block(n_embd, n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+
+        self.wpe_wtf = nn.Embedding(6, n_embd)
+
+    def forward(self, tok, mem):
+        # tok: (bs )
+        # mem: (bs, n_layer, d)
+        mask = torch.ones(6, 6, dtype=bool, device=tok.device)
+
+        x = self.wte(tok)  # (bs, d)
+        x = torch.cat([mem, x[:, None, :]], dim=1) # bs, n_layer+1, d
+        y = self.wpe_wtf(torch.arange(6, device=tok.device))
+        x = x + self.wpe_wtf(torch.arange(6, device=tok.device)) # (6, d)
+        for block in self.blocks:
+            x = block(x, mask=mask)
+        # x is (bs, n_layer+1, d)
+        mem, x = torch.split(x, [5, 1], dim=1)
+        x = rearrange(x, 'b 1 d -> b d')
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        return logits, mem
+    
