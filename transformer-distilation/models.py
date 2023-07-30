@@ -70,6 +70,8 @@ class GPT(nn.Module):
             self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size, dtype=torch.bool)))
         elif mask == "full":
             self.register_buffer("mask", torch.ones(block_size, block_size, dtype=torch.bool))
+        else:
+            raise ValueError(f"Unknown mask type {mask}")
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -151,17 +153,52 @@ class GPT(nn.Module):
 #         return torch.nn.functional.cross_entropy(logits.reshape(-1, self.encoder.vocab_size), y.reshape(-1), reduction="none").reshape(b, -1)
 
 
-class CompressionGPT(GPT):
+class WeirdGPT(GPT):
     def __init__(self, vocab_size, block_size, n_embd, n_layer, n_head, dropout=0.0, bias=True):
         super().__init__(vocab_size, block_size, n_embd, n_layer, n_head, dropout, bias)
-        self.wpe_enc = nn.Embedding(block_size, n_embd)
+        self.i_dec = block_size // 2
 
-    def forward(self, tok, mode="train"):
+        self.mask = torch.tril(torch.ones(block_size, block_size, dtype=bool, device="cpu"))
+        self.mask[: self.i_dec, : self.i_dec] = True
+        self.mask[self.i_dec :, : self.i_dec] = False
+        self.mask[:, self.i_dec - 1] = True
+
+    def forward(self, tok):
+        b, t = tok.shape
+        assert t == self.block_size
+        pos = torch.arange(0, t, dtype=torch.long, device=tok.device)  # shape (t)
+        x = self.drop(self.wte(tok) + self.wpe(pos))
+        for block in self.blocks:
+            x = block(x, mask=self.mask[:t, :t])
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        logits = torch.where(rearrange(pos < self.i_dec, "t -> 1 t 1"), torch.nan, logits)
+        return logits
+
+
+class CompressionGPT(GPT):
+    def __init__(self, vocab_size, block_size, n_embd, n_layer, n_head, dropout=0.0, bias=True, mode="random"):
+        super().__init__(vocab_size, block_size, n_embd, n_layer, n_head, dropout, bias)
+        self.wpe_enc = nn.Embedding(block_size, n_embd)
+        self.mode = mode
+
+    def forward(self, tok, mode=None):
+        if mode is None:
+            mode = self.mode
         b, t = tok.shape
         assert t <= self.block_size
-        self.idxs_dec = torch.randint(0, self.block_size, size=(b,), device=tok.device)
+        if mode.startswith("random"):
+            self.idxs_dec = torch.randint(0, t, size=(b,), device=tok.device)
+        elif mode.startswith("encode"):
+            self.idxs_dec = torch.zeros(t - 1, dtype=torch.long, device=tok.device)
+        elif mode.startswith("decode"):
+            self.idxs_dec = torch.zeros(b, dtype=torch.long, device=tok.device)
+        elif mode.startswith("half"):
+            self.idxs_dec = torch.full((b,), fill_value=t // 2, dtype=torch.long, device=tok.device)
+        else:
+            raise ValueError(f"Unknown mode {mode}")
         pos = torch.arange(0, t, dtype=torch.long, device=tok.device)  # shape (t)
-        self.mask = self.create_compression_attn_mask(tok, self.idxs_dec)
+        self.mask = self.create_compression_attn_mask(tok, self.idxs_dec, mode)
         self.batch_mask = self.create_compression_batch_mask(pos, self.idxs_dec)
 
         x = self.drop(self.wte(tok) + torch.where(self.batch_mask[:, :, None], self.wpe_enc(pos), self.wpe(pos)))
@@ -172,10 +209,12 @@ class CompressionGPT(GPT):
         logits = torch.where(self.batch_mask[:, :, None], torch.nan, logits)
         return logits
 
-    def create_compression_attn_mask(self, tok, idxs_dec):
+    def create_compression_attn_mask(self, tok, idxs_dec, mode):
         b, t = tok.shape
         mask = torch.tril(torch.ones(b, t, t, dtype=torch.bool, device=idxs_dec.device))
         for i, i_dec in enumerate(idxs_dec):
+            if mode.endswith("full"):
+                mask[i, :i_dec, :i_dec] = True
             mask[i, i_dec:, :i_dec] = False
             mask[i, i_dec:, torch.clamp(i_dec - 1, 0, None)] = True
         return mask  # (b, t, t)
